@@ -24,15 +24,16 @@ morir() { echo; printf '\033[31m  ✗ %s\033[0m\n' "$*"; echo; exit 1; }
 # corriendo desde una copia del repo, se usa la de al lado; si llega por tubería
 # (curl | bash), se descarga.
 cargar_lib() {
-  local propio
   # Con "curl | bash" no hay archivo de origen, así que BASH_SOURCE no existe:
-  # el :- evita que set -u aborte por variable sin definir.
+  # el :- evita que set -u aborte. Si no hay copia al lado, se pasa a descargar.
   local origen="${BASH_SOURCE[0]:-}"
-  [[ -z "$origen" ]] && return 1
-  propio="$(cd "$(dirname "$origen")" 2>/dev/null && pwd)/lib-requisitos.sh"
-  if [[ -r "$propio" ]]; then
-    # shellcheck disable=SC1090
-    source "$propio" && declare -F tiene_claude_desktop >/dev/null 2>&1 && return 0
+  if [[ -n "$origen" ]]; then
+    local propio
+    propio="$(cd "$(dirname "$origen")" 2>/dev/null && pwd)/lib-requisitos.sh"
+    if [[ -r "$propio" ]]; then
+      # shellcheck disable=SC1090
+      source "$propio" && declare -F tiene_claude_desktop >/dev/null 2>&1 && return 0
+    fi
   fi
   local tmp; tmp="$(mktemp)"
   # cache-bust: el CDN de raw.githubusercontent sirve copias viejas unos minutos
