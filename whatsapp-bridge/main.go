@@ -64,6 +64,11 @@ func envPortOr(key string, fallback int) int {
 	return p
 }
 
+// Ajustes de SQLite. busy_timeout hace que una escritura espere en vez de
+// fallar cuando la base esta ocupada, y WAL deja leer mientras se escribe.
+// Sin esto el cliente suelta SQLITE_BUSY al sincronizar.
+const sqlitePragmas = "?_pragma=foreign_keys(1)&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"
+
 // storePath arma una ruta dentro de la carpeta de datos de esta instancia.
 func storePath(parts ...string) string {
 	return filepath.Join(append([]string{storeDir}, parts...)...)
@@ -92,7 +97,7 @@ func NewMessageStore() (*MessageStore, error) {
 	}
 
 	// Open SQLite database for messages
-	db, err := sql.Open("sqlite", "file:"+storePath("messages.db")+"?_pragma=foreign_keys(1)")
+	db, err := sql.Open("sqlite", "file:"+storePath("messages.db")+sqlitePragmas)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open message database: %v", err)
 	}
@@ -948,7 +953,7 @@ func main() {
 		return
 	}
 
-	container, err := sqlstore.New(context.Background(), "sqlite", "file:"+storePath("whatsapp.db")+"?_pragma=foreign_keys(1)", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite", "file:"+storePath("whatsapp.db")+sqlitePragmas, dbLog)
 	if err != nil {
 		logger.Errorf("Failed to connect to database: %v", err)
 		return
