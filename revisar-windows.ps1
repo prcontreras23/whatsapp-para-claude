@@ -116,6 +116,15 @@ Bold "Para Claude Code"
 Revisar "git"         "git"    'if ((git --version) -match "(\d+\.\d+\.\d+)") { $Matches[1] }' "Claude Code lo usa para ver tus cambios" $null
 Revisar "Claude Code" "claude" '((claude --version) -split " ")[0]' "es el programa principal" $null
 
+"  {0,-16} " -f "Claude Desktop" | Write-Host -NoNewline
+if (Tiene-ClaudeDesktop) {
+  Write-Host "OK " -ForegroundColor Green -NoNewline; Write-Host "instalada"
+} else {
+  Write-Host "X " -ForegroundColor Red -NoNewline
+  Write-Host "falta - la app de ventana, para usar Claude sin la terminal"
+  $Faltan += "desktop"
+}
+
 Write-Host ""
 Bold "Para conectar WhatsApp (opcional)"
 Revisar "Go"     "go"     '((go version) -split " ")[2] -replace "^go",""' "compila el puente de WhatsApp" $ultGo
@@ -158,7 +167,8 @@ if ($Faltan.Count -gt 0) {
   foreach ($f in $Faltan) {
     switch ($f) {
       "git"    { Write-Host "    - git - Git for Windows" }
-      "claude" { Write-Host "    - Claude Code - instalador oficial de Anthropic" }
+      "claude"  { Write-Host "    - Claude Code - instalador oficial de Anthropic" }
+      "desktop" { Write-Host "    - Claude Desktop - la app de ventana" }
       "go"     { Write-Host "    - Go - solo si vas a conectar WhatsApp" }
       "uv"     { Write-Host "    - uv - solo si vas a conectar WhatsApp" }
       "ffmpeg" { Write-Host "    - ffmpeg - solo para notas de voz" }
@@ -185,7 +195,8 @@ foreach ($f in $Faltan) {
   "  instalando {0,-8} " -f $f | Write-Host -NoNewline
   $ok = switch ($f) {
     "git"    { Instalar-Git }
-    "claude" { Instalar-Claude }
+    "claude"  { Instalar-Claude }
+    "desktop" { Instalar-ClaudeDesktop }
     "go"     { Instalar-Go }
     "uv"     { Instalar-Uv }
     "ffmpeg" { Instalar-Ffmpeg }
@@ -193,6 +204,7 @@ foreach ($f in $Faltan) {
   }
   if ($ok) { Write-Host "OK" -ForegroundColor Green }
   elseif ($f -eq "ffmpeg") { Write-Host "o (opcional, se sigue sin el)" -ForegroundColor Yellow }
+  elseif ($f -eq "desktop") { Write-Host "o bajala de https://claude.com/download" -ForegroundColor Yellow }
   else { Write-Host "X" -ForegroundColor Red }
 }
 

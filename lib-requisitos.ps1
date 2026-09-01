@@ -146,6 +146,31 @@ function Instalar-Claude {
   return (Tiene claude)
 }
 
+# ------------------------------------------------------------------ Claude Desktop
+
+# La app de escritorio. Distinta de Claude Code: una es ventana, la otra terminal.
+function Tiene-ClaudeDesktop {
+  $rutas = @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Claude\Claude.exe"),
+    (Join-Path $env:LOCALAPPDATA "AnthropicClaude\Claude.exe"),
+    "C:\Program Files\Claude\Claude.exe"
+  )
+  foreach ($r in $rutas) { if (Test-Path $r) { return $true } }
+  if (Tiene winget) {
+    $l = winget list --id Anthropic.Claude -e 2>$null | Out-String
+    if ($l -match "Anthropic\.Claude") { return $true }
+  }
+  return $false
+}
+
+function Instalar-ClaudeDesktop {
+  if (Tiene-ClaudeDesktop) { return $true }
+  if (Probar-Winget "Anthropic.Claude") {
+    if (Tiene-ClaudeDesktop) { return $true }
+  }
+  return $false
+}
+
 # ------------------------------------------------------------------ ffmpeg
 
 # ffmpeg solo hace falta para enviar notas de voz. Si no se puede instalar,

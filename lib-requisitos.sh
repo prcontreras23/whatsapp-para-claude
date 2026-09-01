@@ -148,6 +148,43 @@ instalar_claude() {
   tiene claude
 }
 
+# ------------------------------------------------------------------ Claude Desktop
+
+# La app de escritorio. Distinta de Claude Code: una es ventana, la otra terminal.
+tiene_claude_desktop() {
+  [[ -d "/Applications/Claude.app" || -d "$HOME/Applications/Claude.app" ]]
+}
+
+# Devuelve 0 si quedó instalada, 1 si no se pudo, 2 si hace falta Homebrew
+# y el usuario todavía no lo autorizó.
+instalar_claude_desktop() {
+  tiene_claude_desktop && return 0
+
+  # Anthropic sirve el DMG detrás de Cloudflare, que bloquea las descargas por
+  # terminal. El camino soportado es el cask oficial de Homebrew, que copia la
+  # app a /Applications sin pedir contraseña de administrador.
+  if cargar_brew; then
+    brew install --cask claude >/dev/null 2>&1
+    tiene_claude_desktop && return 0
+    return 1
+  fi
+  return 2
+}
+
+# Instala Homebrew. A diferencia de todo lo demás, esto SÍ pide la contraseña
+# del Mac, porque crea carpetas fuera del home del usuario.
+instalar_brew() {
+  cargar_brew && return 0
+  if : < /dev/tty 2>/dev/null; then
+    NONINTERACTIVE=1 /bin/bash -c \
+      "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/tty
+  else
+    NONINTERACTIVE=1 /bin/bash -c \
+      "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  fi
+  cargar_brew
+}
+
 # ------------------------------------------------------------------ ffmpeg
 
 # ffmpeg solo hace falta para enviar notas de voz. Si no se puede instalar,

@@ -101,6 +101,14 @@ bold "Para Claude Code"
 revisar "git"         git    'git --version | awk "{print \$3}"' "Claude Code lo usa para ver tus cambios"
 revisar "Claude Code" claude 'claude --version | awk "{print \$1}"' "es el programa principal"
 
+printf '  %-16s ' "Claude Desktop"
+if tiene_claude_desktop; then
+  verde "✓"; printf ' instalada\n'
+else
+  rojo "✗"; printf ' falta — la app de ventana, para usar Claude sin la terminal\n'
+  FALTAN+=("desktop")
+fi
+
 echo
 bold "Para conectar WhatsApp (opcional)"
 revisar "Go"     go     'go version | awk "{print \$3}" | sed "s/^go//"' "compila el puente de WhatsApp" "$ULT_GO"
@@ -148,7 +156,8 @@ if [[ ${#FALTAN[@]} -gt 0 ]]; then
   for f in "${FALTAN[@]}"; do
     case "$f" in
       git)    echo "    • git — viene con las Command Line Tools de Xcode" ;;
-      claude) echo "    • Claude Code — instalador oficial de Anthropic" ;;
+      claude)  echo "    • Claude Code — instalador oficial de Anthropic" ;;
+      desktop) echo "    • Claude Desktop — la app de ventana (se instala con Homebrew)" ;;
       go)     echo "    • Go — solo si vas a conectar WhatsApp" ;;
       uv)     echo "    • uv — solo si vas a conectar WhatsApp" ;;
       ffmpeg) echo "    • ffmpeg — solo para notas de voz" ;;
@@ -160,7 +169,15 @@ if [[ ${#VIEJOS[@]} -gt 0 ]]; then
   echo "  Se puede actualizar:  ${VIEJOS[*]}"
   echo
 fi
-gris "  Nada de esto pide contraseña de administrador ni necesita Homebrew."
+NECESITA_BREW=0
+for f in "${FALTAN[@]}"; do [[ "$f" == "desktop" ]] && ! tiene brew && NECESITA_BREW=1; done
+
+if [[ $NECESITA_BREW -eq 1 ]]; then
+  gris "  Todo se instala sin contraseña, menos Claude Desktop: esa app se instala"
+  gris "  con Homebrew, y montar Homebrew pide tu contraseña del Mac una sola vez."
+else
+  gris "  Nada de esto pide contraseña de administrador."
+fi
 echo
 
 # ---------------------------------------------------------------- arreglar
@@ -183,11 +200,34 @@ case "${RESP:-n}" in
 esac
 
 echo
+if [[ $NECESITA_BREW -eq 1 ]]; then
+  printf '  ¿Instalo Homebrew para poder poner Claude Desktop? Pide tu contraseña. [s/N] '
+  read -r RB < /dev/tty
+  case "${RB:-n}" in
+    s|S|si|Si|SI|y|Y)
+      printf '  instalando Homebrew... '
+      instalar_brew >/dev/null 2>&1 && verde "✓" || rojo "✗"
+      echo ;;
+    *)
+      gris "  Se salta Claude Desktop. La puedes bajar cuando quieras de https://claude.com/download"
+      FALTAN=("${FALTAN[@]/desktop}") ;;
+  esac
+  echo
+fi
+
 for f in "${FALTAN[@]}"; do
+  [[ -z "$f" ]] && continue
   printf '  instalando %-8s ' "$f"
   case "$f" in
     git)    instalar_git    && verde "✓" || rojo "✗" ;;
     claude) instalar_claude && verde "✓" || rojo "✗" ;;
+    desktop)
+      instalar_claude_desktop
+      case $? in
+        0) verde "✓" ;;
+        2) ambar "○ sin Homebrew — bájala de https://claude.com/download" ;;
+        *) rojo "✗" ;;
+      esac ;;
     go)     instalar_go     && verde "✓" || rojo "✗" ;;
     uv)     instalar_uv     && verde "✓" || rojo "✗" ;;
     ffmpeg) instalar_ffmpeg && verde "✓" || ambar "○ (opcional, se sigue sin él)" ;;

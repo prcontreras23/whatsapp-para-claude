@@ -37,7 +37,9 @@ curl -fsSL https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/
 irm https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/revisar-windows.ps1 | iex
 ```
 
-Revisa el sistema (versión, memoria, disco), git, Claude Code, y los tres programas del puente de WhatsApp. Instala lo que falte y actualiza lo que esté viejo — **sin Homebrew, sin winget y sin contraseña de administrador**.
+Revisa el sistema (versión, memoria, disco), git, **Claude Code**, **Claude Desktop** (la app de ventana) y los tres programas del puente de WhatsApp. Instala lo que falte y actualiza lo que esté viejo, sin contraseña de administrador.
+
+> La única excepción es **Claude Desktop en Mac**: Anthropic sirve el instalador detrás de una protección que bloquea las descargas por terminal, así que la vía soportada es el cask oficial de Homebrew. Si no tienes Homebrew, el script te pregunta antes de instalarlo — eso sí pide tu contraseña, una sola vez. Si prefieres no hacerlo, te deja el enlace para bajarla del navegador. En Windows no hay ese problema: se instala con winget.
 
 > Si solo quieres Claude Code y nada más, el instalador oficial de Anthropic basta:
 > `curl -fsSL https://claude.ai/install.sh | bash` en Mac, o `irm https://claude.ai/install.ps1 | iex` en Windows.
