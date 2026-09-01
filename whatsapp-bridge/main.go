@@ -10,16 +10,19 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"github.com/mdp/qrterminal"
+	qrcode "github.com/skip2/go-qrcode"
+	_ "modernc.org/sqlite"
 
 	"bytes"
 
@@ -78,6 +81,37 @@ const sqlitePragmas = "?_pragma=foreign_keys(1)&_pragma=busy_timeout(10000)&_pra
 // storePath arma una ruta dentro de la carpeta de datos de esta instancia.
 func storePath(parts ...string) string {
 	return filepath.Join(append([]string{storeDir}, parts...)...)
+}
+
+// guardarQRImagen escribe el codigo QR como PNG dentro de la carpeta de datos
+// de la instancia, para poder mostrarlo sin depender de la terminal.
+func guardarQRImagen(codigo string) (string, error) {
+	if err := os.MkdirAll(storeDir, 0755); err != nil {
+		return "", err
+	}
+	ruta := storePath("qr.png")
+	if err := qrcode.WriteFile(codigo, qrcode.Medium, 512, ruta); err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(ruta)
+	if err != nil {
+		return ruta, nil
+	}
+	return abs, nil
+}
+
+// abrirArchivo lo abre con el visor por defecto del sistema.
+func abrirArchivo(ruta string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", ruta)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", ruta)
+	default:
+		cmd = exec.Command("xdg-open", ruta)
+	}
+	_ = cmd.Start()
 }
 
 // Message represents a chat message for our client
@@ -1030,6 +1064,16 @@ func main() {
 			if evt.Event == "code" {
 				fmt.Println("\nScan this QR code with your WhatsApp app:")
 				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+				// Ademas del QR de texto, se guarda como imagen: el instalador
+				// grafico la abre para que no haga falta mirar la terminal.
+				if ruta, err := guardarQRImagen(evt.Code); err != nil {
+					fmt.Fprintf(os.Stderr, "No se pudo guardar el QR como imagen: %v\n", err)
+				} else {
+					fmt.Printf("QR tambien guardado en: %s\n", ruta)
+					if os.Getenv("WHATSAPP_QR_OPEN") == "1" {
+						abrirArchivo(ruta)
+					}
+				}
 			} else if evt.Event == "success" {
 				connected <- true
 				break

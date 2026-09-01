@@ -32,53 +32,34 @@ No necesitas saber programar. Los programas que hagan falta los instala solo.
 
 ---
 
-## Instalar en Mac
+## Instalar
 
-Abre la aplicación **Terminal** y pega esto:
+**No hace falta escribir ningún comando.** Descarga el proyecto y haz doble clic.
 
-```bash
-git clone https://github.com/prcontreras23/whatsapp-para-claude.git
-cd whatsapp-para-claude
-./install.sh
-```
+### 1. Descarga el proyecto
 
-Cuando termine, te va a decir exactamente qué escribir para vincular tu teléfono.
+Entra a [la página del proyecto](https://github.com/prcontreras23/whatsapp-para-claude), dale al botón verde **Code** → **Download ZIP**, y descomprime el archivo.
 
----
+### 2. Haz doble clic
 
-## Instalar en Windows
+| Si tienes | Doble clic en |
+|---|---|
+| **Mac** | `Instalar en Mac.command` |
+| **Windows** | `Instalar en Windows.bat` |
 
-Abre **PowerShell** (búscalo en el menú de inicio) y pega esto:
+El instalador hace todo solo: revisa qué programas faltan, los instala, prepara todo, y te va avisando en pantalla. Toma unos 15 minutos, casi todos de espera.
 
-```powershell
-git clone https://github.com/prcontreras23/whatsapp-para-claude.git
-cd whatsapp-para-claude
-.\install.ps1
-```
-
-Si te dice que no reconoce `git`, descarga el proyecto como ZIP desde GitHub (botón verde **Code** → **Download ZIP**), descomprímelo, y abre PowerShell dentro de esa carpeta.
-
-Si te dice que no puede ejecutar scripts, corre esto primero:
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
-
-> **Nota**: la primera vez, el instalador puede pedirte que cierres PowerShell y abras una ventana nueva. Es normal — Windows necesita eso para reconocer los programas que acaba de instalar. Vuelve a correr `.\install.ps1` y sigue.
-
----
-
-## Vincular tu teléfono
-
-Al terminar la instalación te va a salir un comando para correr. Al hacerlo aparece un **código QR** en la pantalla.
-
-En tu teléfono:
+En el momento indicado te va a **abrir un código QR en la pantalla**. Ahí sacas tu teléfono:
 
 **WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo**
 
-Escanea el código. Después vas a ver mucho texto moviéndose: está bajando tu historial. **Espera a que se calme** (unos minutos si tienes muchos chats) y presiona `Ctrl+C`.
+Escaneas, y el instalador se encarga del resto. Al terminar solo tienes que cerrar Claude Code y abrirlo de nuevo.
 
-Ya está. Ahora corre los tres comandos que te indicó el instalador, reinicia Claude Code, y pruébalo pidiéndole que te muestre tus últimos chats.
+> **En Mac**, si te dice que no se puede abrir porque viene de internet: haz clic derecho sobre el archivo → **Abrir**, y confirma. Es la advertencia normal de macOS para archivos descargados.
+>
+> **En Windows**, la primera vez puede pedirte cerrar la ventana y volver a hacer doble clic. Es normal: Windows necesita eso para reconocer los programas recién instalados.
+
+> Si prefieres la terminal, `install.sh` (Mac) y `install.ps1` (Windows) hacen lo mismo desde la línea de comandos.
 
 ### Cosas que conviene saber
 
@@ -107,10 +88,14 @@ En Mac, para que el comando corto funcione, abre una terminal nueva después de 
 
 ## ¿Varias cuentas de WhatsApp?
 
-Sí, puedes tener varias a la vez — por ejemplo la personal y la del trabajo, cada una con su número:
+Sí, puedes tener varias a la vez — por ejemplo la personal y la del trabajo, cada una con su número. Para eso sí hace falta la terminal:
 
 ```bash
-./install.sh trabajo
+~/whatsapp-para-claude/wactl new trabajo
+~/whatsapp-para-claude/wactl qr trabajo
+~/whatsapp-para-claude/wactl start trabajo
+~/whatsapp-para-claude/wactl autostart trabajo
+~/whatsapp-para-claude/wactl mcp trabajo
 ```
 
 Cada cuenta queda por su lado: su propio historial, su propia conexión. En Claude aparecen separadas (`whatsapp-principal`, `whatsapp-trabajo`), así que le puedes decir por cuál mandar cada cosa.
