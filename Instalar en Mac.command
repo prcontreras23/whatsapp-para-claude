@@ -29,6 +29,7 @@ avisar() {  # título, mensaje
 bold()  { printf '\033[1m%s\033[0m\n' "$*"; }
 ok()    { printf '\033[32m  ✓\033[0m %s\n' "$*"; }
 info()  { printf '\033[90m  · %s\033[0m\n' "$*"; }
+warn()  { printf '\033[33m  ! %s\033[0m\n' "$*"; }
 paso()  { echo; bold "$*"; }
 
 morir() {
@@ -74,34 +75,46 @@ fi
 
 paso "1. Revisando qué hace falta"
 
-tiene() { command -v "$1" >/dev/null 2>&1; }
+# shellcheck source=lib-requisitos.sh
+source "$REPO_DIR/lib-requisitos.sh" || morir "Falta el archivo lib-requisitos.sh en esta carpeta."
+ruta_extendida
 
-if ! tiene brew; then
-  avisar "Falta un programa base" "Necesito instalar Homebrew primero, que es lo que trae los demás programas.
-
-Se va a abrir una ventana pidiendo tu contraseña de Mac. Es normal: es la instalación oficial de Homebrew.
-
-Cuando termine, vuelve a hacer doble clic en este instalador."
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  echo
-  echo "Homebrew instalado. Vuelve a hacer doble clic en el instalador."
-  exit 0
-fi
-ok "Homebrew"
-
-FALTAN=()
 for prog in go uv ffmpeg; do
-  if tiene "$prog"; then ok "$prog"; else info "falta $prog"; FALTAN+=("$prog"); fi
+  tiene "$prog" && ok "$prog" || info "falta $prog"
 done
 
-if [[ ${#FALTAN[@]} -gt 0 ]]; then
-  paso "2. Instalando lo que falta (${FALTAN[*]})"
-  info "esto puede tardar varios minutos"
-  brew install "${FALTAN[@]}" || morir "No se pudieron instalar: ${FALTAN[*]}"
-  ok "listo"
-else
-  paso "2. No falta nada por instalar"
+paso "2. Instalando lo que falta"
+
+if ! tiene go || ! tiene uv; then
+  info "esto puede tardar varios minutos, no cierres la ventana"
 fi
+
+if ! tiene go; then
+  info "instalando Go..."
+  instalar_go && ok "Go" || morir "No pude instalar Go automáticamente.
+
+Descárgalo de https://go.dev/dl/ (la versión para Mac), instálalo, y vuelve a hacer doble clic aquí."
+fi
+
+if ! tiene uv; then
+  info "instalando uv..."
+  instalar_uv && ok "uv" || morir "No pude instalar uv automáticamente.
+
+Abre la Terminal, pega esta línea, y vuelve a hacer doble clic aquí:
+
+curl -LsSf https://astral.sh/uv/install.sh | sh"
+fi
+
+if ! tiene ffmpeg; then
+  info "instalando ffmpeg..."
+  if instalar_ffmpeg; then
+    ok "ffmpeg"
+  else
+    warn "sin ffmpeg: todo funciona menos enviar notas de voz"
+  fi
+fi
+
+persistir_ruta
 
 # ---------------------------------------------------------------- copiar y compilar
 
@@ -110,6 +123,7 @@ mkdir -p "$DESTINO"
 if [[ "$REPO_DIR" != "$DESTINO" ]]; then
   cp -R "$REPO_DIR/whatsapp-bridge" "$REPO_DIR/whatsapp-mcp-server" "$DESTINO/" 2>/dev/null
   cp "$REPO_DIR/wactl" "$DESTINO/wactl"
+  cp "$REPO_DIR/lib-requisitos.sh" "$DESTINO/" 2>/dev/null
   [[ -f "$REPO_DIR/LICENSE" ]] && cp "$REPO_DIR/LICENSE" "$DESTINO/"
 fi
 chmod +x "$DESTINO/wactl"

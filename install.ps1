@@ -36,35 +36,37 @@ Write-Host ""
 
 Paso "1. Revisando lo que hace falta"
 
-if (-not (Tiene winget)) {
-  Warn "No tienes winget, que es lo que instala los programas."
-  Write-Host ""
-  Write-Host "     Instala 'Instalador de aplicaciones' desde la Microsoft Store"
-  Write-Host "     y vuelve a correr este instalador."
-  Write-Host ""
-  Morir "winget es necesario para seguir."
-}
-Ok "winget"
+. (Join-Path $RepoDir "lib-requisitos.ps1")
+Ruta-Extendida
 
-$Faltan = @()
-foreach ($par in @(@("go","GoLang.Go"), @("uv","astral-sh.uv"), @("ffmpeg","Gyan.FFmpeg"))) {
-  if (Tiene $par[0]) { Ok $par[0] } else { Info "falta $($par[0])"; $Faltan += ,$par }
+foreach ($p in @('go','uv','ffmpeg')) {
+  if (Tiene $p) { Ok $p } else { Info "falta $p" }
 }
 
-if ($Faltan.Count -gt 0) {
-  Paso "2. Instalando lo que falta"
-  foreach ($par in $Faltan) {
-    Info "instalando $($par[0])..."
-    winget install --id $par[1] -e --accept-source-agreements --accept-package-agreements --silent | Out-Null
+Paso "2. Instalando lo que falta"
+
+if (-not (Tiene go)) {
+  Info "instalando Go (puede tardar unos minutos)..."
+  if (Instalar-Go) { Ok "Go" } else {
+    Morir "No pude instalar Go. Descargalo de https://go.dev/dl/ y vuelve a correr este instalador."
   }
-  Ok "listo"
-  Warn "Cierra esta ventana y abre una PowerShell NUEVA, luego vuelve a correr el instalador."
-  Warn "(Windows necesita reabrir la terminal para ver los programas recien instalados.)"
-  Write-Host ""
-  exit 0
-} else {
-  Paso "2. No falta nada por instalar"
 }
+
+if (-not (Tiene uv)) {
+  Info "instalando uv..."
+  if (Instalar-Uv) { Ok "uv" } else {
+    Morir "No pude instalar uv. Corre:  irm https://astral.sh/uv/install.ps1 | iex   y vuelve a intentar."
+  }
+}
+
+if (-not (Tiene ffmpeg)) {
+  Info "instalando ffmpeg..."
+  if (Instalar-Ffmpeg) { Ok "ffmpeg" } else {
+    Warn "Sin ffmpeg: todo funciona menos enviar notas de voz."
+  }
+}
+
+Persistir-Ruta
 
 if (-not (Tiene claude)) { Warn "No encuentro el comando 'claude'. Al final tendras que registrar el MCP a mano." }
 
@@ -77,6 +79,7 @@ if ($RepoDir -ne $Destino) {
   Copy-Item -Recurse -Force (Join-Path $RepoDir "whatsapp-bridge")     $Destino
   Copy-Item -Recurse -Force (Join-Path $RepoDir "whatsapp-mcp-server") $Destino
   Copy-Item -Force (Join-Path $RepoDir "wactl.ps1") $Destino
+  Copy-Item -Force (Join-Path $RepoDir "lib-requisitos.ps1") $Destino
   $lic = Join-Path $RepoDir "LICENSE"
   if (Test-Path $lic) { Copy-Item -Force $lic $Destino }
 }

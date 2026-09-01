@@ -28,7 +28,9 @@ Si el equipo comparte una computadora, mejor no lo instalen ahí: cada quien en 
 - Claude Code instalado
 - Unos 15 minutos, casi todos de espera
 
-No necesitas saber programar. Los programas que hagan falta los instala solo.
+No necesitas saber programar, ni tener nada instalado de antemano. El instalador se encarga de los tres programas que hacen falta (Go, uv y ffmpeg): usa Homebrew o winget si los tienes, y si no, los baja de sus sitios oficiales y los deja en tu carpeta de usuario, **sin pedirte contraseña de administrador**.
+
+> ffmpeg es el único opcional: solo hace falta para enviar notas de voz. Si no se puede instalar, el resto funciona igual y el instalador te lo avisa en vez de abortar.
 
 ---
 
@@ -131,6 +133,8 @@ Dos piezas:
 Ambos están hechos para correr **varias cuentas a la vez**: cada una con su carpeta de datos y su puerto, configurados con variables de entorno (`WHATSAPP_STORE_DIR`, `WHATSAPP_BRIDGE_PORT`, `WHATSAPP_API_BASE_URL`, `WHATSAPP_MESSAGES_DB`, `WHATSAPP_MCP_NAME`). El gestor `wactl` se encarga de eso; no hay que tocarlas a mano.
 
 La base de datos usa un SQLite escrito en Go puro, así que **no hace falta ningún compilador de C** — ni en Mac ni en Windows. Eso es lo que permite que el instalador sea un solo comando.
+
+Los requisitos se resuelven en `lib-requisitos.sh` (Mac) y `lib-requisitos.ps1` (Windows). Ninguno depende de un gestor de paquetes: prueban Homebrew o winget primero, y si no están o fallan, caen a los instaladores oficiales de Go y uv, que se extraen en `~/.local` sin permisos de administrador.
 
 ### Lo que Claude puede hacer
 

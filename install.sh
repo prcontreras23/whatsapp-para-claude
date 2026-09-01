@@ -39,40 +39,40 @@ echo
 
 paso "1. Revisando lo que hace falta"
 
-FALTAN=()
-tiene() { command -v "$1" >/dev/null 2>&1; }
+# shellcheck source=lib-requisitos.sh
+source "$REPO_DIR/lib-requisitos.sh" || morir "Falta el archivo lib-requisitos.sh"
+ruta_extendida
 
-if tiene brew; then
-  ok "Homebrew"
-else
-  warn "Falta Homebrew, que es lo que instala lo demás."
-  echo
-  echo "     Instálalo con esta línea y vuelve a correr este instalador:"
-  echo
-  echo '     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-  echo
-  morir "Homebrew es necesario para seguir."
-fi
-
-for prog in go uv; do
-  if tiene "$prog"; then ok "$prog"; else info "falta $prog"; FALTAN+=("$prog"); fi
+for prog in go uv ffmpeg; do
+  tiene "$prog" && ok "$prog" || info "falta $prog"
 done
 
-if tiene ffmpeg; then
-  ok "ffmpeg"
-else
-  info "falta ffmpeg (hace falta solo para enviar notas de voz)"
-  FALTAN+=("ffmpeg")
+paso "2. Instalando lo que falta"
+
+if tiene go; then :; else
+  info "instalando Go (puede tardar unos minutos)..."
+  instalar_go && ok "Go" || morir "No pude instalar Go.
+Instálalo a mano desde https://go.dev/dl/ y vuelve a correr este instalador."
 fi
 
-if [[ ${#FALTAN[@]} -gt 0 ]]; then
-  paso "2. Instalando lo que falta: ${FALTAN[*]}"
-  brew install "${FALTAN[@]}" || morir "No se pudo instalar: ${FALTAN[*]}"
-  ok "listo"
-else
-  paso "2. No falta nada por instalar"
+if tiene uv; then :; else
+  info "instalando uv..."
+  instalar_uv && ok "uv" || morir "No pude instalar uv.
+Instálalo a mano con:  curl -LsSf https://astral.sh/uv/install.sh | sh
+y vuelve a correr este instalador."
 fi
 
+if tiene ffmpeg; then :; else
+  info "instalando ffmpeg..."
+  if instalar_ffmpeg; then
+    ok "ffmpeg"
+  else
+    warn "No pude instalar ffmpeg. Todo va a funcionar menos enviar notas de voz."
+    warn "Si las quieres, instálalo después con: brew install ffmpeg"
+  fi
+fi
+
+persistir_ruta
 tiene claude || warn "No encuentro el comando 'claude'. Al final tendrás que registrar el MCP a mano."
 
 # ---------------------------------------------------------------- copiar
@@ -83,6 +83,7 @@ mkdir -p "$DESTINO"
 if [[ "$REPO_DIR" != "$DESTINO" ]]; then
   cp -R "$REPO_DIR/whatsapp-bridge" "$REPO_DIR/whatsapp-mcp-server" "$DESTINO/" 2>/dev/null
   cp "$REPO_DIR/wactl" "$DESTINO/wactl"
+  cp "$REPO_DIR/lib-requisitos.sh" "$DESTINO/" 2>/dev/null
   [[ -f "$REPO_DIR/LICENSE" ]] && cp "$REPO_DIR/LICENSE" "$DESTINO/"
 fi
 chmod +x "$DESTINO/wactl"

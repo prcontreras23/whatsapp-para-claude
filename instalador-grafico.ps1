@@ -70,40 +70,52 @@ if (-not (Preguntar "WhatsApp para Claude" $texto)) {
 
 Paso "1. Revisando que hace falta"
 
-if (-not (Tiene winget)) {
-  Alerta "Falta un programa base" @"
-Necesito 'winget', que es lo que instala los demas programas.
+. (Join-Path $RepoDir "lib-requisitos.ps1")
+Ruta-Extendida
 
-Abre la Microsoft Store, busca 'Instalador de aplicaciones' e instalalo.
-Despues vuelve a hacer doble clic en este instalador.
+foreach ($p in @('go','uv','ffmpeg')) {
+  if (Tiene $p) { Ok $p } else { Info "falta $p" }
+}
+
+Paso "2. Instalando lo que falta"
+
+if (-not (Tiene go) -or -not (Tiene uv)) {
+  Info "esto puede tardar varios minutos, no cierres la ventana"
+}
+
+if (-not (Tiene go)) {
+  Info "instalando Go..."
+  if (Instalar-Go) { Ok "Go" } else {
+    Morir @"
+No pude instalar Go automaticamente.
+
+Descargalo de https://go.dev/dl/ (la version para Windows), instalalo,
+y vuelve a hacer doble clic aqui.
 "@
-  exit 1
-}
-Ok "winget"
-
-$Faltan = @()
-foreach ($par in @(@("go","GoLang.Go"), @("uv","astral-sh.uv"), @("ffmpeg","Gyan.FFmpeg"))) {
-  if (Tiene $par[0]) { Ok $par[0] } else { Info "falta $($par[0])"; $Faltan += ,$par }
-}
-
-if ($Faltan.Count -gt 0) {
-  Paso "2. Instalando lo que falta"
-  Info "esto puede tardar varios minutos"
-  foreach ($par in $Faltan) {
-    Info "instalando $($par[0])..."
-    winget install --id $par[1] -e --accept-source-agreements --accept-package-agreements --silent | Out-Null
   }
-  Aviso "Falta un paso" @"
-Ya instale los programas que faltaban.
-
-Windows necesita que cierres esta ventana y vuelvas a hacer doble clic en el instalador para reconocerlos.
-
-Cierra esta ventana y vuelve a empezar.
-"@
-  exit 0
-} else {
-  Paso "2. No falta nada por instalar"
 }
+
+if (-not (Tiene uv)) {
+  Info "instalando uv..."
+  if (Instalar-Uv) { Ok "uv" } else {
+    Morir @"
+No pude instalar uv automaticamente.
+
+Abre PowerShell, pega esta linea, y vuelve a hacer doble clic aqui:
+
+irm https://astral.sh/uv/install.ps1 | iex
+"@
+  }
+}
+
+if (-not (Tiene ffmpeg)) {
+  Info "instalando ffmpeg..."
+  if (Instalar-Ffmpeg) { Ok "ffmpeg" } else {
+    Alerta "Sin ffmpeg" "No pude instalar ffmpeg. Todo va a funcionar menos enviar notas de voz."
+  }
+}
+
+Persistir-Ruta
 
 # ---------------------------------------------------------------- copiar y compilar
 
@@ -113,6 +125,7 @@ if ($RepoDir -ne $Destino) {
   Copy-Item -Recurse -Force (Join-Path $RepoDir "whatsapp-bridge")     $Destino
   Copy-Item -Recurse -Force (Join-Path $RepoDir "whatsapp-mcp-server") $Destino
   Copy-Item -Force (Join-Path $RepoDir "wactl.ps1") $Destino
+  Copy-Item -Force (Join-Path $RepoDir "lib-requisitos.ps1") $Destino
   $lic = Join-Path $RepoDir "LICENSE"
   if (Test-Path $lic) { Copy-Item -Force $lic $Destino }
 }
