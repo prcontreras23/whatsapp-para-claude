@@ -37,6 +37,12 @@ chmod +x "$FUENTE/Instalar en Mac.command" "$FUENTE/wactl" "$FUENTE/install.sh" 
 verde "  ✓ listo"
 gris  "  archivos en $FUENTE"
 
-# El instalador muestra diálogos del sistema; se le da la terminal como entrada
-# para que funcione igual aunque este script venga por una tubería.
-exec "$FUENTE/Instalar en Mac.command" < /dev/tty
+# El instalador muestra diálogos del sistema; se le devuelve la terminal como
+# entrada, porque este script llega por una tubería y stdin viene ocupado.
+# Si no hay terminal (por ejemplo, corriendo dentro de otro proceso), se ejecuta
+# igual en vez de fallar.
+if : < /dev/tty 2>/dev/null; then
+  exec "$FUENTE/Instalar en Mac.command" < /dev/tty
+else
+  exec "$FUENTE/Instalar en Mac.command"
+fi
