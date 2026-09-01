@@ -67,6 +67,12 @@ func envPortOr(key string, fallback int) int {
 // Ajustes de SQLite. busy_timeout hace que una escritura espere en vez de
 // fallar cuando la base esta ocupada, y WAL deja leer mientras se escribe.
 // Sin esto el cliente suelta SQLITE_BUSY al sincronizar.
+// Formato de fecha para la base. Hay que escribirlo explicitamente: el driver
+// puro-Go guardaria time.Time con su String() ("2026-08-31 22:51:12 -0400 AST"),
+// que no es ISO y rompe el parseo del lado Python. Este es el mismo formato que
+// ya tienen los registros historicos.
+const dbTimeFormat = "2006-01-02 15:04:05-07:00"
+
 const sqlitePragmas = "?_pragma=foreign_keys(1)&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"
 
 // storePath arma una ruta dentro de la carpeta de datos de esta instancia.
@@ -145,7 +151,7 @@ func (store *MessageStore) Close() error {
 func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time) error {
 	_, err := store.db.Exec(
 		"INSERT OR REPLACE INTO chats (jid, name, last_message_time) VALUES (?, ?, ?)",
-		jid, name, lastMessageTime,
+		jid, name, lastMessageTime.Format(dbTimeFormat),
 	)
 	return err
 }
@@ -162,7 +168,7 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 		`INSERT OR REPLACE INTO messages 
 		(id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url, media_key, file_sha256, file_enc_sha256, file_length) 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, chatJID, sender, content, timestamp, isFromMe, mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength,
+		id, chatJID, sender, content, timestamp.Format(dbTimeFormat), isFromMe, mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength,
 	)
 	return err
 }
