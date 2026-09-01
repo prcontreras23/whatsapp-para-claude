@@ -21,6 +21,29 @@ Si el equipo comparte una computadora, mejor no lo instalen ahí: cada quien en 
 
 ---
 
+## Antes: ¿tu computadora está lista?
+
+Si es una máquina nueva, o no sabes qué tiene instalado, corre primero la revisión. **Audita la máquina, te dice qué falta y qué está desactualizado, y solo entonces te pregunta si lo arregla.** No toca nada sin tu confirmación.
+
+**Mac** — en la app Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/revisar-mac.sh | bash
+```
+
+**Windows** — en PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/revisar-windows.ps1 | iex
+```
+
+Revisa el sistema (versión, memoria, disco), git, Claude Code, y los tres programas del puente de WhatsApp. Instala lo que falte y actualiza lo que esté viejo — **sin Homebrew, sin winget y sin contraseña de administrador**.
+
+> Si solo quieres Claude Code y nada más, el instalador oficial de Anthropic basta:
+> `curl -fsSL https://claude.ai/install.sh | bash` en Mac, o `irm https://claude.ai/install.ps1 | iex` en Windows.
+
+---
+
 ## Qué necesitas
 
 - Una Mac o una PC con Windows 10/11

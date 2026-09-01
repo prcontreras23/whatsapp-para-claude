@@ -103,6 +103,51 @@ instalar_uv() {
   tiene uv
 }
 
+# ------------------------------------------------------------------ git
+
+# En macOS git viene con las Command Line Tools de Xcode. Instalarlas abre un
+# diálogo del sistema que el usuario tiene que aceptar; no hay forma de hacerlo
+# en silencio sin permisos de administrador.
+instalar_git() {
+  ruta_extendida
+  tiene git && return 0
+
+  # Si Xcode o las Command Line Tools ya están, git deberia aparecer.
+  if xcode-select -p >/dev/null 2>&1; then
+    tiene git && return 0
+  fi
+
+  printf '\033[33m  ! Falta git. Se va a abrir una ventana de macOS para instalarlo.\033[0m\n'
+  printf '\033[33m  ! Dale a "Instalar" y espera a que termine (unos minutos).\033[0m\n'
+  xcode-select --install >/dev/null 2>&1
+
+  # Esperar a que aparezca, hasta 20 minutos.
+  local i
+  for i in $(seq 1 240); do
+    if xcode-select -p >/dev/null 2>&1 && tiene git; then
+      return 0
+    fi
+    sleep 5
+  done
+
+  ruta_extendida
+  tiene git
+}
+
+# ------------------------------------------------------------------ Claude Code
+
+instalar_claude() {
+  ruta_extendida
+  tiene claude && return 0
+
+  # Instalador oficial de Anthropic: deja claude en ~/.local/bin,
+  # se actualiza solo, y no necesita Homebrew ni npm.
+  curl -fsSL https://claude.ai/install.sh 2>/dev/null | bash >/dev/null 2>&1
+
+  ruta_extendida
+  tiene claude
+}
+
 # ------------------------------------------------------------------ ffmpeg
 
 # ffmpeg solo hace falta para enviar notas de voz. Si no se puede instalar,

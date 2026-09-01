@@ -98,6 +98,54 @@ function Instalar-Uv {
   return (Tiene uv)
 }
 
+# ------------------------------------------------------------------ git
+
+function Instalar-Git {
+  Ruta-Extendida
+  if (Tiene git) { return $true }
+
+  if (Probar-Winget "Git.Git") { Ruta-Extendida; if (Tiene git) { return $true } }
+
+  # Instalador oficial de Git for Windows, en modo silencioso.
+  try {
+    $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "64-bit" }
+    $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/git-for-windows/git/releases/latest" -TimeoutSec 30
+    $asset = $rel.assets | Where-Object { $_.name -like "*$arch.exe" -and $_.name -notlike "*Portable*" } | Select-Object -First 1
+    if (-not $asset) { return $false }
+    $exe = Join-Path $env:TEMP $asset.name
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $exe -UseBasicParsing
+    Start-Process -FilePath $exe -ArgumentList "/VERYSILENT","/NORESTART" -Wait
+    Remove-Item $exe -ErrorAction SilentlyContinue
+  } catch {
+    return $false
+  }
+
+  # Git for Windows instala en Program Files; se agrega al PATH de la sesion.
+  foreach ($d in @("C:\Program Files\Git\cmd", "C:\Program Files (x86)\Git\cmd")) {
+    if ((Test-Path $d) -and ($env:PATH -notlike "*$d*")) { $env:PATH = "$d;$env:PATH" }
+  }
+  return (Tiene git)
+}
+
+# ------------------------------------------------------------------ Claude Code
+
+function Instalar-Claude {
+  Ruta-Extendida
+  if (Tiene claude) { return $true }
+
+  # Instalador oficial de Anthropic: deja claude en la carpeta del usuario,
+  # se actualiza solo, y no necesita winget ni npm ni Node.
+  try {
+    $script = Invoke-RestMethod -Uri "https://claude.ai/install.ps1" -TimeoutSec 60
+    Invoke-Expression $script | Out-Null
+  } catch {
+    return $false
+  }
+
+  Ruta-Extendida
+  return (Tiene claude)
+}
+
 # ------------------------------------------------------------------ ffmpeg
 
 # ffmpeg solo hace falta para enviar notas de voz. Si no se puede instalar,
