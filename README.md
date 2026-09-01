@@ -49,6 +49,18 @@ Entra a [la página del proyecto](https://github.com/prcontreras23/whatsapp-para
 | **Mac** | `Instalar en Mac.command` |
 | **Windows** | `Instalar en Windows.bat` |
 
+> **En Mac el doble clic puede no hacer nada.** No es un fallo tuyo: macOS marca todo lo que baja del navegador y se niega a ejecutarlo si no está firmado con un Developer ID de Apple (de pago). Tienes dos salidas:
+>
+> **La fácil** — clic derecho sobre `Instalar en Mac.command` → **Abrir** → confirma. Solo la primera vez.
+>
+> **La que nunca falla** — abre la app **Terminal** (Cmd+Espacio, escribe "terminal", Enter), pega esta línea y dale Enter:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/instalar.sh | bash
+> ```
+>
+> Eso baja y arranca todo solo, sin descargar el ZIP ni pelear con macOS. Lo que baja así no lleva la marca que bloquea Gatekeeper.
+
 El instalador hace todo solo: revisa qué programas faltan, los instala, prepara todo, y te va avisando en pantalla. Toma unos 15 minutos, casi todos de espera.
 
 En el momento indicado te va a **abrir un código QR en la pantalla**. Ahí sacas tu teléfono:
@@ -57,8 +69,6 @@ En el momento indicado te va a **abrir un código QR en la pantalla**. Ahí saca
 
 Escaneas, y el instalador se encarga del resto. Al terminar solo tienes que cerrar Claude Code y abrirlo de nuevo.
 
-> **En Mac**, si te dice que no se puede abrir porque viene de internet: haz clic derecho sobre el archivo → **Abrir**, y confirma. Es la advertencia normal de macOS para archivos descargados.
->
 > **En Windows**, la primera vez puede pedirte cerrar la ventana y volver a hacer doble clic. Es normal: Windows necesita eso para reconocer los programas recién instalados.
 
 > Si prefieres la terminal, `install.sh` (Mac) y `install.ps1` (Windows) hacen lo mismo desde la línea de comandos.
