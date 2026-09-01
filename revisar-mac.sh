@@ -25,7 +25,11 @@ morir() { echo; printf '\033[31m  ✗ %s\033[0m\n' "$*"; echo; exit 1; }
 # (curl | bash), se descarga.
 cargar_lib() {
   local propio
-  propio="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib-requisitos.sh"
+  # Con "curl | bash" no hay archivo de origen, así que BASH_SOURCE no existe:
+  # el :- evita que set -u aborte por variable sin definir.
+  local origen="${BASH_SOURCE[0]:-}"
+  [[ -z "$origen" ]] && return 1
+  propio="$(cd "$(dirname "$origen")" 2>/dev/null && pwd)/lib-requisitos.sh"
   if [[ -r "$propio" ]]; then
     # shellcheck disable=SC1090
     source "$propio" && declare -F tiene_claude_desktop >/dev/null 2>&1 && return 0
