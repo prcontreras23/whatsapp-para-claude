@@ -172,7 +172,7 @@ if [[ ${#FALTAN[@]} -gt 0 ]]; then
     case "$f" in
       git)    echo "    • git — viene con las Command Line Tools de Xcode" ;;
       claude)  echo "    • Claude Code — instalador oficial de Anthropic" ;;
-      desktop) echo "    • Claude Desktop — la app de ventana (se instala con Homebrew)" ;;
+      desktop) echo "    • Claude Desktop — la app oficial de ventana (350 MB)" ;;
       go)     echo "    • Go — solo si vas a conectar WhatsApp" ;;
       uv)     echo "    • uv — solo si vas a conectar WhatsApp" ;;
       ffmpeg) echo "    • ffmpeg — solo para notas de voz" ;;
@@ -184,15 +184,7 @@ if [[ ${#VIEJOS[@]} -gt 0 ]]; then
   echo "  Se puede actualizar:  ${VIEJOS[*]}"
   echo
 fi
-NECESITA_BREW=0
-for f in "${FALTAN[@]}"; do [[ "$f" == "desktop" ]] && ! tiene brew && NECESITA_BREW=1; done
-
-if [[ $NECESITA_BREW -eq 1 ]]; then
-  gris "  Todo se instala sin contraseña, menos Claude Desktop: esa app se instala"
-  gris "  con Homebrew, y montar Homebrew pide tu contraseña del Mac una sola vez."
-else
-  gris "  Nada de esto pide contraseña de administrador."
-fi
+gris "  Nada de esto pide contraseña de administrador ni necesita Homebrew."
 echo
 
 # ---------------------------------------------------------------- arreglar
@@ -215,21 +207,6 @@ case "${RESP:-n}" in
 esac
 
 echo
-if [[ $NECESITA_BREW -eq 1 ]]; then
-  printf '  ¿Instalo Homebrew para poder poner Claude Desktop? Pide tu contraseña. [s/N] '
-  read -r RB < /dev/tty
-  case "${RB:-n}" in
-    s|S|si|Si|SI|y|Y)
-      printf '  instalando Homebrew... '
-      instalar_brew >/dev/null 2>&1 && verde "✓" || rojo "✗"
-      echo ;;
-    *)
-      gris "  Se salta Claude Desktop. La puedes bajar cuando quieras de https://claude.com/download"
-      FALTAN=("${FALTAN[@]/desktop}") ;;
-  esac
-  echo
-fi
-
 for f in "${FALTAN[@]}"; do
   [[ -z "$f" ]] && continue
   printf '  instalando %-8s ' "$f"
@@ -237,11 +214,14 @@ for f in "${FALTAN[@]}"; do
     git)    instalar_git    && verde "✓" || rojo "✗" ;;
     claude) instalar_claude && verde "✓" || rojo "✗" ;;
     desktop)
+      gris ""
+      printf '    bajando la app oficial (unos 350 MB, tarda un rato)... '
       instalar_claude_desktop
       case $? in
         0) verde "✓" ;;
-        2) ambar "○ sin Homebrew — bájala de https://claude.com/download" ;;
-        *) rojo "✗" ;;
+        3) rojo "✗ el archivo bajado no coincide con el original — no se instaló" ;;
+        4) rojo "✗ la app no viene firmada por Anthropic — no se instaló" ;;
+        *) rojo "✗ bájala a mano de https://claude.com/download" ;;
       esac ;;
     go)     instalar_go     && verde "✓" || rojo "✗" ;;
     uv)     instalar_uv     && verde "✓" || rojo "✗" ;;

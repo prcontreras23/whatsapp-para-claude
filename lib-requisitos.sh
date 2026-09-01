@@ -155,20 +155,59 @@ tiene_claude_desktop() {
   [[ -d "/Applications/Claude.app" || -d "$HOME/Applications/Claude.app" ]]
 }
 
-# Devuelve 0 si quedó instalada, 1 si no se pudo, 2 si hace falta Homebrew
-# y el usuario todavía no lo autorizó.
+# Descarga e instala la app oficial de Anthropic, sin Homebrew ni contraseña.
+#
+# El binario viene de downloads.claude.ai, el dominio de descargas de Anthropic.
+# La versión y el checksum salen de la API pública de Homebrew, que es un índice
+# consultable sin tener Homebrew instalado; se usa solo para saber cuál es la
+# versión actual, y el archivo se verifica contra su sha256 antes de instalarlo.
+# (La otra ruta, claude.ai/api/desktop/..., responde 403 a las descargas por
+# terminal, así que no sirve aquí.)
 instalar_claude_desktop() {
   tiene_claude_desktop && return 0
 
-  # Anthropic sirve el DMG detrás de Cloudflare, que bloquea las descargas por
-  # terminal. El camino soportado es el cask oficial de Homebrew, que copia la
-  # app a /Applications sin pedir contraseña de administrador.
-  if cargar_brew; then
-    brew install --cask claude >/dev/null 2>&1
-    tiene_claude_desktop && return 0
-    return 1
+  local meta url sha nombre
+  meta="$(curl -fsSL --max-time 30 'https://formulae.brew.sh/api/cask/claude.json' 2>/dev/null)" || return 1
+  url="$(printf '%s' "$meta" | python3 -c "import json,sys;print(json.load(sys.stdin).get('url',''))" 2>/dev/null)"
+  sha="$(printf '%s' "$meta" | python3 -c "import json,sys;print(json.load(sys.stdin).get('sha256',''))" 2>/dev/null)"
+  [[ -z "$url" ]] && return 1
+
+  local tmp; tmp="$(mktemp -d)"
+  nombre="$tmp/Claude.zip"
+
+  # Son unos 350 MB.
+  curl -fL --max-time 900 "$url" -o "$nombre" 2>/dev/null || { rm -rf "$tmp"; return 1; }
+
+  if [[ -n "$sha" && "$sha" != "no_check" ]]; then
+    local real; real="$(shasum -a 256 "$nombre" | awk '{print $1}')"
+    if [[ "$real" != "$sha" ]]; then
+      rm -rf "$tmp"
+      return 3   # el archivo no coincide con lo esperado
+    fi
   fi
-  return 2
+
+  ditto -x -k "$nombre" "$tmp/extraido" 2>/dev/null || { rm -rf "$tmp"; return 1; }
+
+  local app; app="$(find "$tmp/extraido" -maxdepth 2 -name "Claude.app" -print -quit 2>/dev/null)"
+  [[ -z "$app" ]] && { rm -rf "$tmp"; return 1; }
+
+  # Segunda comprobación: que la app venga firmada por Anthropic. El checksum ya
+  # garantiza que el archivo llegó íntegro; esto confirma de quién es.
+  if ! codesign -dv --verbose=2 "$app" 2>&1 | grep -q "Authority=Developer ID Application: Anthropic"; then
+    rm -rf "$tmp"
+    return 4
+  fi
+
+  local destino="/Applications"
+  [[ -w "$destino" ]] || { destino="$HOME/Applications"; mkdir -p "$destino"; }
+
+  rm -rf "$destino/Claude.app"
+  ditto "$app" "$destino/Claude.app" 2>/dev/null || { rm -rf "$tmp"; return 1; }
+  # Quitar la marca de descarga para que no salga el aviso de Gatekeeper.
+  xattr -dr com.apple.quarantine "$destino/Claude.app" 2>/dev/null
+
+  rm -rf "$tmp"
+  tiene_claude_desktop
 }
 
 # Instala Homebrew. A diferencia de todo lo demás, esto SÍ pide la contraseña
