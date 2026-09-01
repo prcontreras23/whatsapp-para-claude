@@ -1,0 +1,20 @@
+# Programas compilados
+whatsapp-bridge/whatsapp-bridge
+whatsapp-bridge/whatsapp-bridge.exe
+whatsapp-bridge/*.bak
+
+# Datos de las cuentas: sesiones, mensajes, multimedia. Nunca al repo.
+whatsapp-bridge/store/
+*.db
+*.pid
+
+# Registros
+*.log
+
+# Python
+whatsapp-mcp-server/.venv/
+__pycache__/
+*.py[oc]
+
+# macOS
+.DS_Store

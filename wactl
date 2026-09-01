@@ -1,0 +1,337 @@
+#!/bin/bash
+# wactl — gestor de instancias del bridge de WhatsApp.
+#
+# Cada instancia es una cuenta de WhatsApp distinta: su propio número, su propia
+# sesión, su propia base de mensajes y su propio puerto. Todas comparten un solo
+# código base en ~/mcp-servers/whatsapp-mcp.
+#
+# Uso:
+#   wactl list                    instancias y su estado
+#   wactl new <nombre>            crear una instancia nueva
+#   wactl qr <nombre>             vincular el teléfono (primer plano, muestra el QR)
+#   wactl start|stop|restart <n>  controlar el bridge
+#   wactl status [nombre]         estado detallado
+#   wactl logs <nombre> [lineas]  ver el log
+#   wactl mcp <nombre>            registrar la instancia en Claude Code
+#   wactl autostart <nombre>      que arranque sola al encender (launchd)
+#   wactl remove <nombre>         eliminar la instancia y sus datos
+
+set -uo pipefail
+
+# Ubicación propia: wactl vive junto a whatsapp-bridge/ y whatsapp-mcp-server/,
+# así que deduce sus rutas en vez de tenerlas escritas a fuego.
+WACTL_HOME="${WACTL_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+
+INSTANCES_DIR="${WHATSAPP_INSTANCES_DIR:-$HOME/.whatsapp-para-claude}"
+BRIDGE_BIN="$WACTL_HOME/whatsapp-bridge/whatsapp-bridge"
+MCP_SERVER_DIR="$WACTL_HOME/whatsapp-mcp-server"
+LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
+PLIST_PREFIX="com.whatsapp-mcp.bridge"
+
+rojo()  { printf '\033[31m%s\033[0m\n' "$*"; }
+verde() { printf '\033[32m%s\033[0m\n' "$*"; }
+gris()  { printf '\033[90m%s\033[0m\n' "$*"; }
+
+morir() { rojo "Error: $*" >&2; exit 1; }
+
+env_file() { echo "$INSTANCES_DIR/$1.env"; }
+
+existe() { [[ -f "$(env_file "$1")" ]]; }
+
+cargar() {
+  local n="$1"
+  existe "$n" || morir "la instancia '$n' no existe. Míralas con: wactl list"
+  # shellcheck disable=SC1090
+  source "$(env_file "$n")"
+}
+
+validar_nombre() {
+  [[ "$1" =~ ^[a-z0-9][a-z0-9-]*$ ]] || \
+    morir "nombre inválido '$1'. Solo minúsculas, números y guiones."
+}
+
+puerto_ocupado() { lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+
+puerto_libre() {
+  local p=8080
+  while :; do
+    if ! puerto_ocupado "$p" && ! grep -qs "WHATSAPP_BRIDGE_PORT=$p$" "$INSTANCES_DIR"/*.env 2>/dev/null; then
+      echo "$p"; return
+    fi
+    ((p++))
+    [[ $p -gt 8130 ]] && morir "no encontré puerto libre entre 8080 y 8130"
+  done
+}
+
+pid_real() {
+  local n="$1"; cargar "$n"
+  local p
+  for p in $(pgrep -x whatsapp-bridge 2>/dev/null); do
+    if ps -o command= -p "$p" 2>/dev/null | grep -q .; then
+      # comprobar la variable de entorno del proceso
+      if ps eww -o command= -p "$p" 2>/dev/null | grep -q "WHATSAPP_STORE_DIR=$WHATSAPP_STORE_DIR"; then
+        echo "$p"; return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+api_vivo() { curl -s -m 2 -o /dev/null "http://localhost:$1/api/" 2>/dev/null; }
+
+# Lee el número vinculado de la sesión, en vez de tenerlo escrito a mano.
+numero_de() {
+  local db="$1/whatsapp.db"
+  [[ -f "$db" ]] || { echo "sin vincular"; return; }
+  local jid
+  jid="$(sqlite3 "$db" 'select jid from whatsmeow_device limit 1' 2>/dev/null)"
+  [[ -z "$jid" ]] && { echo "sin vincular"; return; }
+  echo "+${jid%%[:@]*}"
+}
+
+# ---------------------------------------------------------------- comandos
+
+cmd_list() {
+  mkdir -p "$INSTANCES_DIR"
+  local encontradas=0
+  printf '%-14s %-7s %-10s %-9s %s\n' INSTANCIA PUERTO ESTADO MENSAJES NÚMERO
+  printf '%-14s %-7s %-10s %-9s %s\n' "------" "------" "------" "--------" "------"
+  local f
+  for f in "$INSTANCES_DIR"/*.env; do
+    [[ -e "$f" ]] || continue
+    encontradas=1
+    local n; n="$(basename "$f" .env)"
+    ( cargar "$n"
+      local estado="parado" msgs="-" num; num="$(numero_de "$WHATSAPP_STORE_DIR")"
+      if pid_real "$n" >/dev/null 2>&1; then
+        if api_vivo "$WHATSAPP_BRIDGE_PORT"; then estado="activo"; else estado="arrancando"; fi
+      fi
+      local db="$WHATSAPP_STORE_DIR/messages.db"
+      if [[ -f "$db" ]]; then
+        msgs="$(sqlite3 "$db" 'select count(*) from messages' 2>/dev/null || echo '-')"
+      fi
+      printf '%-14s %-7s %-10s %-9s %s\n' "$n" "$WHATSAPP_BRIDGE_PORT" "$estado" "$msgs" "$num"
+    )
+  done
+  [[ $encontradas -eq 0 ]] && gris "(ninguna todavía — créala con: wactl new <nombre>)"
+  return 0
+}
+
+cmd_new() {
+  local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre. Ej: wactl new personal"
+  validar_nombre "$n"
+  existe "$n" && morir "la instancia '$n' ya existe"
+  mkdir -p "$INSTANCES_DIR"
+
+  local puerto; puerto="$(puerto_libre)"
+  local store="$INSTANCES_DIR/$n/store"
+  mkdir -p "$store"
+
+  cat > "$(env_file "$n")" <<EOF
+# Instancia '$n' del bridge de WhatsApp — creada $(date '+%Y-%m-%d %H:%M')
+WHATSAPP_INSTANCIA=$n
+WHATSAPP_STORE_DIR=$store
+WHATSAPP_BRIDGE_PORT=$puerto
+WHATSAPP_API_BASE_URL=http://localhost:$puerto/api
+WHATSAPP_MESSAGES_DB=$store/messages.db
+WHATSAPP_MCP_NAME=whatsapp-$n
+EOF
+
+  verde "Instancia '$n' creada."
+  echo "  puerto : $puerto"
+  echo "  datos  : $store"
+  echo
+  echo "Siguiente paso — vincular el teléfono:"
+  echo "  wactl qr $n"
+}
+
+cmd_qr() {
+  local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
+  cargar "$n"
+  if pid_real "$n" >/dev/null 2>&1; then
+    morir "'$n' ya está corriendo. Párala primero: wactl stop $n"
+  fi
+  echo "Arrancando '$n' en primer plano."
+  echo "Escanea el QR desde: WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo"
+  echo "Cuando termine de sincronizar, Ctrl+C y luego: wactl start $n"
+  echo
+  mkdir -p "$WHATSAPP_STORE_DIR"
+  cd "$(dirname "$BRIDGE_BIN")" || morir "no encuentro el bridge"
+  WHATSAPP_STORE_DIR="$WHATSAPP_STORE_DIR" \
+  WHATSAPP_BRIDGE_PORT="$WHATSAPP_BRIDGE_PORT" \
+    "$BRIDGE_BIN"
+}
+
+cmd_start() {
+  local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
+  cargar "$n"
+  if pid_real "$n" >/dev/null 2>&1; then
+    gris "'$n' ya estaba corriendo (PID $(pid_real "$n"))"; return 0
+  fi
+  puerto_ocupado "$WHATSAPP_BRIDGE_PORT" && \
+    morir "el puerto $WHATSAPP_BRIDGE_PORT está ocupado por otro proceso"
+  [[ -f "$WHATSAPP_STORE_DIR/whatsapp.db" ]] || \
+    morir "'$n' no está vinculada todavía. Corre primero: wactl qr $n"
+
+  mkdir -p "$WHATSAPP_STORE_DIR"
+  local log="$INSTANCES_DIR/$n/bridge.log"
+  mkdir -p "$(dirname "$log")"
+  ( cd "$(dirname "$BRIDGE_BIN")" && \
+    WHATSAPP_STORE_DIR="$WHATSAPP_STORE_DIR" \
+    WHATSAPP_BRIDGE_PORT="$WHATSAPP_BRIDGE_PORT" \
+    nohup "$BRIDGE_BIN" >> "$log" 2>&1 & )
+  sleep 2
+  if pid_real "$n" >/dev/null 2>&1; then
+    verde "'$n' arrancada en el puerto $WHATSAPP_BRIDGE_PORT"
+  else
+    rojo "'$n' no arrancó. Mira el log: wactl logs $n"; return 1
+  fi
+}
+
+cmd_stop() {
+  local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
+  cargar "$n"
+  local p; p="$(pid_real "$n" 2>/dev/null)"
+  if [[ -z "$p" ]]; then gris "'$n' no estaba corriendo"; return 0; fi
+  kill "$p" 2>/dev/null
+  sleep 1
+  pid_real "$n" >/dev/null 2>&1 && kill -9 "$p" 2>/dev/null
+  verde "'$n' detenida"
+}
+
+cmd_restart() { cmd_stop "$1"; sleep 1; cmd_start "$1"; }
+
+cmd_status() {
+  if [[ $# -eq 0 || -z "${1:-}" ]]; then cmd_list; return; fi
+  local n="$1"; cargar "$n"
+  echo "Instancia : $n"
+  echo "Puerto    : $WHATSAPP_BRIDGE_PORT"
+  echo "Datos     : $WHATSAPP_STORE_DIR"
+  echo "MCP       : $WHATSAPP_MCP_NAME"
+  echo "Número    : $(numero_de "$WHATSAPP_STORE_DIR")"
+  local p; p="$(pid_real "$n" 2>/dev/null)"
+  if [[ -n "$p" ]]; then
+    echo "Proceso   : corriendo (PID $p)"
+  else
+    echo "Proceso   : parado"
+  fi
+  if api_vivo "$WHATSAPP_BRIDGE_PORT"; then
+    echo "API       : responde en http://localhost:$WHATSAPP_BRIDGE_PORT/api"
+  else
+    echo "API       : no responde"
+  fi
+  local db="$WHATSAPP_STORE_DIR/messages.db"
+  if [[ -f "$db" ]]; then
+    echo "Mensajes  : $(sqlite3 "$db" 'select count(*) from messages' 2>/dev/null || echo '?')"
+    echo "Chats     : $(sqlite3 "$db" 'select count(*) from chats' 2>/dev/null || echo '?')"
+  fi
+  [[ -f "$WHATSAPP_STORE_DIR/whatsapp.db" ]] && echo "Sesión    : vinculada" || echo "Sesión    : SIN VINCULAR (corre: wactl qr $n)"
+}
+
+cmd_logs() {
+  local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
+  cargar "$n"
+  local lineas="${2:-40}"
+  local log="$INSTANCES_DIR/$n/bridge.log"
+  [[ -f "$log" ]] || log="$HOME/mcp-servers/whatsapp-mcp/whatsapp-bridge/bridge.log"
+  [[ -f "$log" ]] || morir "no hay log para '$n'"
+  tail -n "$lineas" "$log"
+}
+
+cmd_mcp() {
+  local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
+  cargar "$n"
+  local uv; uv="$(command -v uv)" || morir "no encuentro uv en el PATH"
+  echo "Registrando '$WHATSAPP_MCP_NAME' en Claude Code..."
+  claude mcp add "$WHATSAPP_MCP_NAME" --scope user \
+    --env WHATSAPP_API_BASE_URL="$WHATSAPP_API_BASE_URL" \
+    --env WHATSAPP_MESSAGES_DB="$WHATSAPP_MESSAGES_DB" \
+    --env WHATSAPP_MCP_NAME="$WHATSAPP_MCP_NAME" \
+    -- "$uv" --directory "$MCP_SERVER_DIR" run main.py \
+    && verde "Listo. Reinicia Claude Code para que aparezcan las herramientas de '$n'."
+}
+
+cmd_autostart() {
+  local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
+  cargar "$n"
+  mkdir -p "$LAUNCH_AGENTS" "$INSTANCES_DIR/$n"
+  local label="$PLIST_PREFIX.$n"
+  local plist="$LAUNCH_AGENTS/$label.plist"
+  local log="$INSTANCES_DIR/$n/bridge.log"
+
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>$label</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>$BRIDGE_BIN</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>$(dirname "$BRIDGE_BIN")</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>WHATSAPP_STORE_DIR</key>
+		<string>$WHATSAPP_STORE_DIR</string>
+		<key>WHATSAPP_BRIDGE_PORT</key>
+		<string>$WHATSAPP_BRIDGE_PORT</string>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- KeepAlive incondicional a propósito: cuando el bridge no logra conectar
+	     con WhatsApp (timeout de red, por ejemplo) sale con codigo 0, y un
+	     SuccessfulExit=false NO lo reviviria. Se quedaria caido en silencio. -->
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>$log</string>
+	<key>StandardErrorPath</key>
+	<string>$log</string>
+	<key>ProcessType</key>
+	<string>Background</string>
+</dict>
+</plist>
+EOF
+
+  launchctl unload "$plist" 2>/dev/null
+  launchctl load "$plist" 2>/dev/null && verde "'$n' queda arrancando sola al encender ($label)"
+}
+
+cmd_remove() {
+  local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
+  cargar "$n"
+  echo "Esto elimina la instancia '$n':"
+  echo "  - su sesión de WhatsApp (habría que volver a escanear el QR)"
+  echo "  - su historial de mensajes en $WHATSAPP_STORE_DIR"
+  read -r -p "Escribe el nombre de la instancia para confirmar: " conf
+  [[ "$conf" == "$n" ]] || { gris "cancelado"; return 1; }
+  cmd_stop "$n" >/dev/null 2>&1
+  local plist="$LAUNCH_AGENTS/$PLIST_PREFIX.$n.plist"
+  [[ -f "$plist" ]] && { launchctl unload "$plist" 2>/dev/null; rm -f "$plist"; }
+  claude mcp remove "$WHATSAPP_MCP_NAME" --scope user 2>/dev/null
+  rm -rf "$INSTANCES_DIR/$n" "$(env_file "$n")"
+  verde "Instancia '$n' eliminada"
+}
+
+cmd_ayuda() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
+
+case "${1:-list}" in
+  list|ls)      shift; cmd_list "$@" ;;
+  new|crear)    shift; cmd_new "$@" ;;
+  qr|vincular)  shift; cmd_qr "$@" ;;
+  start)        shift; cmd_start "$@" ;;
+  stop)         shift; cmd_stop "$@" ;;
+  restart)      shift; cmd_restart "$@" ;;
+  status)       shift; cmd_status "$@" ;;
+  logs|log)     shift; cmd_logs "$@" ;;
+  mcp)          shift; cmd_mcp "$@" ;;
+  autostart)    shift; cmd_autostart "$@" ;;
+  remove|rm)    shift; cmd_remove "$@" ;;
+  -h|--help|help|ayuda) cmd_ayuda ;;
+  *) morir "comando desconocido '${1}'. Mira: wactl ayuda" ;;
+esac
