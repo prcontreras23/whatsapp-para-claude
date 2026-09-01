@@ -20,11 +20,26 @@ morir() { echo; printf '\033[31m  ✗ %s\033[0m\n' "$*"; echo; exit 1; }
 
 [[ "$(uname -s)" == "Darwin" ]] || morir "Esto es para Mac."
 
-LIB="$(mktemp)"
-curl -fsSL "https://raw.githubusercontent.com/$REPO/main/lib-requisitos.sh" -o "$LIB" 2>/dev/null \
-  || morir "No se pudo bajar la revisión. ¿Hay internet?"
-# shellcheck disable=SC1090
-source "$LIB"; rm -f "$LIB"
+# Las funciones de instalación viven en lib-requisitos.sh. Si el script se está
+# corriendo desde una copia del repo, se usa la de al lado; si llega por tubería
+# (curl | bash), se descarga.
+cargar_lib() {
+  local propio
+  propio="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/lib-requisitos.sh"
+  if [[ -r "$propio" ]]; then
+    # shellcheck disable=SC1090
+    source "$propio" && declare -F tiene_claude_desktop >/dev/null 2>&1 && return 0
+  fi
+  local tmp; tmp="$(mktemp)"
+  # cache-bust: el CDN de raw.githubusercontent sirve copias viejas unos minutos
+  curl -fsSL "https://raw.githubusercontent.com/$REPO/main/lib-requisitos.sh?t=$(date +%s)" -o "$tmp" 2>/dev/null \
+    || { rm -f "$tmp"; return 1; }
+  # shellcheck disable=SC1090
+  source "$tmp"; rm -f "$tmp"
+  declare -F tiene_claude_desktop >/dev/null 2>&1
+}
+
+cargar_lib || morir "No se pudo cargar la revisión. ¿Hay internet?"
 ruta_extendida
 
 FALTAN=()

@@ -19,12 +19,24 @@ if (-not $IsWindows -and $PSVersionTable.PSEdition -eq 'Core' -and -not $env:OS)
   Morir "Esto es para Windows. En Mac usa: curl -fsSL https://raw.githubusercontent.com/$Repo/main/revisar-mac.sh | bash"
 }
 
-# Trae Ruta-Extendida, Tiene, Instalar-*
-try {
-  $lib = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$Repo/main/lib-requisitos.ps1" -TimeoutSec 30
-  Invoke-Expression $lib
-} catch {
-  Morir "No se pudo bajar la revisión. Hay internet?"
+# Las funciones de instalacion viven en lib-requisitos.ps1. Si el script corre
+# desde una copia del repo, se usa la de al lado; si llega por tuberia, se baja.
+$libLocal = $null
+if ($PSScriptRoot) { $libLocal = Join-Path $PSScriptRoot "lib-requisitos.ps1" }
+if ($libLocal -and (Test-Path $libLocal)) {
+  . $libLocal
+} else {
+  try {
+    # El parametro de tiempo evita que el CDN sirva una copia vieja.
+    $t = [int][double]::Parse((Get-Date -UFormat %s))
+    $lib = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$Repo/main/lib-requisitos.ps1?t=$t" -TimeoutSec 30
+    Invoke-Expression $lib
+  } catch {
+    Morir "No se pudo bajar la revision. Hay internet?"
+  }
+}
+if (-not (Get-Command Tiene-ClaudeDesktop -ErrorAction SilentlyContinue)) {
+  Morir "La revision se bajo incompleta. Intentalo de nuevo en un minuto."
 }
 Ruta-Extendida
 
