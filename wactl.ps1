@@ -1,4 +1,4 @@
-# wactl — gestor de cuentas de WhatsApp para Claude (Windows)
+﻿# wactl - gestor de cuentas de WhatsApp para Claude (Windows)
 #
 # Cada cuenta es un WhatsApp distinto: su numero, su sesion, su historial y su
 # puerto. Todas comparten un solo programa.

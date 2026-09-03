@@ -1,9 +1,9 @@
-# Audita una PC con Windows y luego instala y actualiza lo que haga falta.
+﻿# Audita una PC con Windows y luego instala y actualiza lo que haga falta.
 #
 # En PowerShell:
 #   irm https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/revisar-windows.ps1 | iex
 #
-# Primero informa: qué tiene, qué falta, qué está desactualizado. Al final
+# Primero informa: que tiene, que falta, que esta desactualizado. Al final
 # ofrece arreglarlo todo. Nada se toca sin que lo confirmes.
 
 $ErrorActionPreference = "Continue"
@@ -24,7 +24,10 @@ if (-not $IsWindows -and $PSVersionTable.PSEdition -eq 'Core' -and -not $env:OS)
 $libLocal = $null
 if ($PSScriptRoot) { $libLocal = Join-Path $PSScriptRoot "lib-requisitos.ps1" }
 if ($libLocal -and (Test-Path $libLocal)) {
-  . $libLocal
+  # Se lee y se evalua en vez de hacer dot-sourcing: cargar un archivo .ps1
+  # directamente choca con la politica de ejecucion de Windows, que bloquea
+  # por defecto los scripts venidos de internet.
+  Invoke-Expression ([System.IO.File]::ReadAllText($libLocal, [System.Text.Encoding]::UTF8))
 } else {
   try {
     # El parametro de tiempo evita que el CDN sirva una copia vieja.
@@ -51,7 +54,7 @@ function MenorQue($a, $b) {
   } catch { return $false }
 }
 
-# ---------------------------------------------------------------- la máquina
+# ---------------------------------------------------------------- la maquina
 
 Write-Host ""
 Bold "=== Revision de esta PC ==="
@@ -88,7 +91,7 @@ if (-not $problema) {
   Write-Host "La maquina cumple los requisitos"
 }
 
-# ---------------------------------------------------------------- últimas versiones
+# ---------------------------------------------------------------- ultimas versiones
 
 Write-Host ""
 Gris "  consultando las versiones mas recientes..."

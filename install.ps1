@@ -1,7 +1,7 @@
-# Instalador de WhatsApp para Claude — Windows
+﻿# Instalador de WhatsApp para Claude - Windows
 #
 # Deja tu WhatsApp conectado a Claude Code. Se puede correr varias veces sin
-# problema: lo que ya está hecho se salta.
+# problema: lo que ya esta hecho se salta.
 #
 #   .\install.ps1              instala y usa el nombre 'principal'
 #   .\install.ps1 trabajo      instala una cuenta con el nombre 'trabajo'
@@ -36,7 +36,7 @@ Write-Host ""
 
 Paso "1. Revisando lo que hace falta"
 
-. (Join-Path $RepoDir "lib-requisitos.ps1")
+Invoke-Expression ([System.IO.File]::ReadAllText((Join-Path $RepoDir "lib-requisitos.ps1"), [System.Text.Encoding]::UTF8))
 Ruta-Extendida
 
 foreach ($p in @('go','uv','ffmpeg')) {

@@ -159,6 +159,22 @@ Es cosa de internet, no del programa. Pasa cuando se reinicia varias veces segui
 **«El código QR se ve como cuadritos raros» (Windows)**
 Usa **Windows Terminal** en vez de la ventana negra clásica. Ahí se ve bien.
 
+**«running scripts is disabled on this system» (Windows)**
+Es la protección de Windows contra scripts bajados de internet. Corre el comando así, que la salta solo para esa vez sin cambiar nada en tu equipo:
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/instalar-windows.ps1 | iex"
+```
+
+**«WhatsApp dice: inténtalo más tarde»**
+Pasa cuando se piden varios códigos QR seguidos — WhatsApp lo toma como abuso y bloquea el vínculo. **No es el límite de 4 dispositivos.** Espera unos 20 minutos y vuelve a intentarlo.
+
+**«Windows me pregunta con qué app abrir el código QR»**
+Elige **Fotos**. Si se cerró antes de escanear, el archivo queda guardado como `qr.png` dentro de la carpeta de tu cuenta.
+
+**«Instalé todo pero Claude no ve mi WhatsApp»**
+Empieza una **conversación nueva**. Las que ya tenías abiertas no lo ven, porque se abrieron antes de conectarlo.
+
 **«Quiero desinstalarlo»**
 `wactl remove principal` borra la cuenta y su historial. Después quita el dispositivo desde tu teléfono, en Dispositivos vinculados.
 

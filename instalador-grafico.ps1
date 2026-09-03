@@ -1,6 +1,6 @@
-# Instalador gráfico para Windows — lo lanza "Instalar en Windows.bat".
+﻿# Instalador grafico para Windows - lo lanza "Instalar en Windows.bat".
 #
-# La persona no escribe ningún comando: responde dos avisos, escanea un código
+# La persona no escribe ningun comando: responde dos avisos, escanea un codigo
 # QR que se le abre en pantalla, y listo.
 
 $ErrorActionPreference = "Stop"
@@ -70,7 +70,9 @@ if (-not (Preguntar "WhatsApp para Claude" $texto)) {
 
 Paso "1. Revisando que hace falta"
 
-. (Join-Path $RepoDir "lib-requisitos.ps1")
+# Se lee y se evalua, en vez de dot-sourcing: la politica de ejecucion de
+# Windows bloquea por defecto los .ps1 bajados de internet.
+Invoke-Expression ([System.IO.File]::ReadAllText((Join-Path $RepoDir "lib-requisitos.ps1"), [System.Text.Encoding]::UTF8))
 Ruta-Extendida
 
 foreach ($p in @('go','uv','ffmpeg')) {
@@ -175,11 +177,23 @@ Ok "cuenta '$Instancia' lista (puerto $($cfg.WHATSAPP_BRIDGE_PORT))"
 $store   = $cfg.WHATSAPP_STORE_DIR
 $qrPath  = Join-Path $store "qr.png"
 $sesion  = Join-Path $store "whatsapp.db"
-$yaVinculado = Test-Path $sesion
+
+# Que el archivo exista no basta: un intento anterior que no llego a escanearse
+# deja un whatsapp.db vacio, y darlo por bueno hace que no se arranque el puente
+# ni se muestre el QR. Se comprueba que dentro haya un numero vinculado de verdad.
+$yaVinculado = $false
+if (Test-Path $sesion) {
+  $num = NumeroDe $store
+  if ($num -and $num -ne "sin vincular") { $yaVinculado = $true }
+}
 
 if ($yaVinculado) {
   Paso "7. Tu WhatsApp ya estaba vinculado"
   Ok "no hace falta escanear otra vez"
+  # El arranque automatico solo entra al reiniciar Windows, asi que hay que
+  # levantarlo ahora o el puente se queda apagado y Claude no ve nada.
+  Info "arrancando el puente..."
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $Wactl start $Instancia | Out-Null
 } else {
   Paso "7. Vinculando tu telefono"
   Remove-Item $qrPath -ErrorAction SilentlyContinue
@@ -209,6 +223,10 @@ if ($yaVinculado) {
   Aviso "Escanea el codigo" @"
 Se abrio un codigo QR en tu pantalla.
 
+Si Windows te pregunta con que app abrirlo, elige *Fotos*.
+Si no se abrio, el archivo esta en:
+$qrPath
+
 En tu telefono:
 
 1. Abre WhatsApp
@@ -231,7 +249,43 @@ Cuando termines, dale a Aceptar aqui.
     Start-Sleep -Seconds 2
   }
   if (-not $conectado) {
-    Morir "No se completo la conexion. Vuelve a hacer doble clic en el instalador para intentarlo otra vez."
+    # El QR sigue vivo un rato: se ofrece reintentar sin generar uno nuevo.
+    # Pedir varios QR seguidos hace que WhatsApp bloquee el vinculo un rato
+    # ("intentalo mas tarde"), asi que conviene reusar el que ya esta en pantalla.
+    $r = [System.Windows.Forms.MessageBox]::Show(@"
+Todavia no se ha conectado.
+
+Si no te dio tiempo de escanear, el codigo sigue abierto en:
+$qrPath
+
+Abrelo, escanealo, y dale a Reintentar.
+
+(No cierres esta ventana: pedir codigos nuevos seguidos hace que WhatsApp
+bloquee el vinculo por unos 20 minutos.)
+"@, "Reintentar?", 'RetryCancel', 'Warning')
+
+    if ($r -eq 'Retry') {
+      Info "esperando otra vez..."
+      for ($i = 0; $i -lt 90; $i++) {
+        try {
+          Invoke-WebRequest -Uri "http://localhost:$($cfg.WHATSAPP_BRIDGE_PORT)/api/" -TimeoutSec 2 -UseBasicParsing | Out-Null
+          $conectado = $true; break
+        } catch {
+          if ($_.Exception.Response) { $conectado = $true; break }
+        }
+        Start-Sleep -Seconds 2
+      }
+    }
+  }
+  if (-not $conectado) {
+    Morir @"
+No se completo la conexion.
+
+Si WhatsApp te dijo 'intentalo mas tarde', espera unos 20 minutos antes de
+volver a intentarlo: bloquea el vinculo cuando se piden varios codigos seguidos.
+
+Despues corre de nuevo el instalador.
+"@
   }
   Ok "conectado"
   Remove-Item $qrPath -ErrorAction SilentlyContinue
@@ -260,6 +314,9 @@ if ($mcpOk) {
 Tu WhatsApp ya esta conectado con Claude.
 
 Ultimo paso: cierra Claude Code y vuelve a abrirlo.
+
+Importante: empieza una conversacion NUEVA. Las que ya tenias abiertas no ven
+el WhatsApp, porque se abrieron antes de conectarlo.
 
 Despues pruebalo pidiendole algo como:
 'muestrame mis ultimos chats de WhatsApp'

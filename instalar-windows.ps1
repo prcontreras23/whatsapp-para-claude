@@ -1,4 +1,4 @@
-# Arranque de una linea para Windows:
+﻿# Arranque de una linea para Windows:
 #
 #   irm https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/instalar-windows.ps1 | iex
 #
@@ -55,4 +55,7 @@ Gris  "  archivos en $Fuente"
 $instalador = Join-Path $Fuente "instalador-grafico.ps1"
 if (-not (Test-Path $instalador)) { Morir "El proyecto se bajo incompleto. Intentalo de nuevo." }
 
-& $instalador
+# -ExecutionPolicy Bypass: Windows bloquea por defecto los scripts bajados de
+# internet ("running scripts is disabled on this system"). El Bypass vale solo
+# para esta ejecucion; no cambia la configuracion de la maquina.
+& powershell -NoProfile -ExecutionPolicy Bypass -File $instalador

@@ -1,6 +1,6 @@
-# Instalación de los programas que hacen falta (Go, uv, ffmpeg) en Windows.
+﻿# Instalacion de los programas que hacen falta (Go, uv, ffmpeg) en Windows.
 #
-# No depende de winget: lo usa si está y funciona, pero si no, cae a los
+# No depende de winget: lo usa si esta y funciona, pero si no, cae a los
 # instaladores oficiales de cada herramienta, que se extraen dentro de la
 # carpeta del usuario y no piden permisos de administrador.
 #
@@ -9,7 +9,7 @@
 $script:LocalBin = Join-Path $env:USERPROFILE ".local\bin"
 $script:LocalGo  = Join-Path $env:USERPROFILE ".local\go"
 
-# Rutas donde estas herramientas suelen quedar, estén o no en el PATH heredado.
+# Rutas donde estas herramientas suelen quedar, esten o no en el PATH heredado.
 function Ruta-Extendida {
   $extra = @(
     $script:LocalBin,
@@ -26,8 +26,8 @@ function Ruta-Extendida {
 
 function Tiene($cmd) { $null -ne (Get-Command $cmd -ErrorAction SilentlyContinue) }
 
-# Intenta con winget. Devuelve $false si no está o si falla, para poder caer al
-# método oficial sin dar el paso por perdido.
+# Intenta con winget. Devuelve $false si no esta o si falla, para poder caer al
+# metodo oficial sin dar el paso por perdido.
 function Probar-Winget($paqueteId) {
   if (-not (Tiene winget)) { return $false }
   try {
@@ -46,7 +46,7 @@ function Instalar-Go {
 
   if (Probar-Winget "GoLang.Go") { Ruta-Extendida; if (Tiene go) { return $true } }
 
-  # ZIP oficial de go.dev, extraído en la carpeta del usuario.
+  # ZIP oficial de go.dev, extraido en la carpeta del usuario.
   $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
   try {
     $lista = Invoke-RestMethod -Uri "https://go.dev/dl/?mode=json" -TimeoutSec 30
@@ -146,6 +146,27 @@ function Instalar-Claude {
   return (Tiene claude)
 }
 
+# ------------------------------------------------------------------ sesion de WhatsApp
+
+# Lee el numero vinculado de la sesion. Sirve para distinguir una sesion real de
+# un whatsapp.db vacio que dejo un intento anterior sin escanear.
+function NumeroDe($store) {
+  $db = Join-Path $store "whatsapp.db"
+  if (-not (Test-Path $db)) { return "sin vincular" }
+  try {
+    # El JID vive al principio del archivo: se leen solo los primeros 256 KB
+    # en vez de cargar una base de decenas de MB en memoria.
+    $fs = [System.IO.File]::OpenRead($db)
+    try {
+      $buf = New-Object byte[] ([Math]::Min(262144, $fs.Length))
+      [void]$fs.Read($buf, 0, $buf.Length)
+    } finally { $fs.Close() }
+    $texto = [System.Text.Encoding]::ASCII.GetString($buf)
+    if ($texto -match '(\d{10,15}):\d+@s\.whatsapp\.net') { return "+" + $Matches[1] }
+  } catch {}
+  return "sin vincular"
+}
+
 # ------------------------------------------------------------------ Claude Desktop
 
 # La app de escritorio. Distinta de Claude Code: una es ventana, la otra terminal.
@@ -184,13 +205,13 @@ function Instalar-Ffmpeg {
 
 # ------------------------------------------------------------------ PATH persistente
 
-# Deja las rutas en el PATH del usuario para que sigan disponibles después.
+# Deja las rutas en el PATH del usuario para que sigan disponibles despues.
 function Persistir-Ruta {
   try {
     $actual = [Environment]::GetEnvironmentVariable("PATH", "User")
-    $añadir = @($script:LocalBin, (Join-Path $script:LocalGo "bin"))
+    $anadir = @($script:LocalBin, (Join-Path $script:LocalGo "bin"))
     $nuevo = $actual
-    foreach ($d in $añadir) {
+    foreach ($d in $anadir) {
       if ($nuevo -notlike "*$d*") {
         $nuevo = if ([string]::IsNullOrEmpty($nuevo)) { $d } else { "$nuevo;$d" }
       }
