@@ -37,6 +37,12 @@ curl -fsSL https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/
 irm https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/revisar-windows.ps1 | iex
 ```
 
+Y para conectar el WhatsApp después, también sin descargar nada a mano:
+
+```powershell
+irm https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/instalar-windows.ps1 | iex
+```
+
 Revisa el sistema (versión, memoria, disco), git, **Claude Code**, **Claude Desktop** (la app de ventana) y los tres programas del puente de WhatsApp. Instala lo que falte y actualiza lo que esté viejo, sin contraseña de administrador.
 
 **Claude Desktop** se baja de `downloads.claude.ai`, el dominio de descargas de Anthropic, y antes de instalarla se comprueban dos cosas: que el archivo coincida con su checksum publicado, y que la app venga **firmada por "Anthropic PBC"** con Developer ID de Apple. Si algo de eso no cuadra, no se instala. En Windows sale por winget (`Anthropic.Claude`).
