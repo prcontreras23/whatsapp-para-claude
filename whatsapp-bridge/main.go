@@ -201,9 +201,16 @@ func NewMessageStore() (*MessageStore, error) {
 			PRIMARY KEY (message_id, chat_jid, sender)
 		);
 		CREATE INDEX IF NOT EXISTS idx_reactions_msg ON reactions(chat_jid, message_id);
+
+		CREATE TABLE IF NOT EXISTS contacts (
+			user TEXT PRIMARY KEY,   -- parte de usuario del JID, tal como queda en messages.sender (LID o teléfono)
+			phone TEXT,
+			lid TEXT,
+			name TEXT
+		);
 	`); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to create reactions table: %v", err)
+		return nil, fmt.Errorf("failed to create reactions/contacts tables: %v", err)
 	}
 
 	return &MessageStore{db: db}, nil
@@ -1441,6 +1448,17 @@ func main() {
 
 	fmt.Println("\n✓ Connected to WhatsApp! Type 'help' for commands.")
 
+	// Libreta y nombres: al arrancar y luego cada hora (los contactos nuevos
+	// van llegando por app state sync).
+	go func() {
+		for {
+			n := syncContacts(client, messageStore, logger)
+			f := repairChatNames(client, messageStore, logger)
+			fmt.Printf("Libreta: %d filas de contactos volcadas, %d chats renombrados\n", n, f)
+			time.Sleep(time.Hour)
+		}
+	}()
+
 	// Start REST API server
 	startRESTServer(client, messageStore, bridgePort)
 
@@ -1459,12 +1477,203 @@ func main() {
 }
 
 // GetChatName determines the appropriate name for a chat based on JID and other info
+// isPlaceholderName dice si un nombre de chat es solo un número: el LID o el
+// teléfono del propio chat, o el LID/teléfono de esta cuenta (el bug viejo:
+// al escribir yo primero en un chat LID, el chat quedaba bautizado con MI LID).
+func isPlaceholderName(client *whatsmeow.Client, jid types.JID, name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || name == jid.User {
+		return true
+	}
+	if client != nil && client.Store != nil {
+		if client.Store.ID != nil && name == client.Store.ID.User {
+			return true
+		}
+		if !client.Store.LID.IsEmpty() && name == client.Store.LID.User {
+			return true
+		}
+	}
+	for _, r := range name {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return len(name) >= 8 // solo dígitos y largo de número: placeholder
+}
+
+// resolveContactName busca el mejor nombre para una persona, cruzando LID y
+// teléfono con la libreta que whatsmeow guarda. Devuelve también el teléfono
+// si lo conoce. name vacío = no hay nada mejor que el número.
+func resolveContactName(client *whatsmeow.Client, jid types.JID) (name string, phone types.JID) {
+	if client == nil || client.Store == nil {
+		return "", types.EmptyJID
+	}
+	ctx := context.Background()
+	candidates := []types.JID{jid.ToNonAD()}
+	switch jid.Server {
+	case types.HiddenUserServer: // @lid
+		if pn, err := client.Store.LIDs.GetPNForLID(ctx, jid.ToNonAD()); err == nil && !pn.IsEmpty() {
+			phone = pn
+			candidates = append(candidates, pn)
+		}
+	case types.DefaultUserServer:
+		phone = jid.ToNonAD()
+		if lid, err := client.Store.LIDs.GetLIDForPN(ctx, jid.ToNonAD()); err == nil && !lid.IsEmpty() {
+			candidates = append(candidates, lid)
+		}
+	}
+	for _, c := range candidates {
+		info, err := client.Store.Contacts.GetContact(ctx, c)
+		if err != nil || !info.Found {
+			continue
+		}
+		for _, n := range []string{info.FullName, info.BusinessName, info.PushName} {
+			if strings.TrimSpace(n) != "" {
+				return strings.TrimSpace(n), phone
+			}
+		}
+	}
+	return "", phone
+}
+
+// repairChatNames renombra los chats individuales que quedaron con un número
+// como nombre. Devuelve cuántos arregló.
+func repairChatNames(client *whatsmeow.Client, messageStore *MessageStore, logger waLog.Logger) int {
+	rows, err := messageStore.db.Query(`SELECT jid, COALESCE(name,'') FROM chats WHERE jid LIKE '%@lid' OR jid LIKE '%@s.whatsapp.net'`)
+	if err != nil {
+		logger.Warnf("repairChatNames: %v", err)
+		return 0
+	}
+	type row struct{ jid, name string }
+	var pending []row
+	for rows.Next() {
+		var r row
+		if rows.Scan(&r.jid, &r.name) == nil {
+			pending = append(pending, r)
+		}
+	}
+	rows.Close()
+
+	fixed := 0
+	for _, r := range pending {
+		jid, err := types.ParseJID(r.jid)
+		if err != nil || !isPlaceholderName(client, jid, r.name) {
+			continue
+		}
+		name, phone := resolveContactName(client, jid)
+		if name == "" && !phone.IsEmpty() && phone.User != r.name {
+			name = phone.User // al menos el teléfono, que dice más que el LID
+		}
+		if name == "" || name == r.name {
+			continue
+		}
+		if _, err := messageStore.db.Exec(`UPDATE chats SET name = ? WHERE jid = ?`, name, r.jid); err == nil {
+			fixed++
+		}
+	}
+	return fixed
+}
+
+// syncContacts vuelca a messages.db la libreta (LID ↔ teléfono ↔ nombre) para
+// que el servidor Python pueda poner nombre a cualquier remitente, aunque no
+// tenga chat directo con él (típico de los grupos).
+func syncContacts(client *whatsmeow.Client, messageStore *MessageStore, logger waLog.Logger) int {
+	if client == nil || client.Store == nil {
+		return 0
+	}
+	ctx := context.Background()
+	all, err := client.Store.Contacts.GetAllContacts(ctx)
+	if err != nil {
+		logger.Warnf("syncContacts: %v", err)
+		return 0
+	}
+	pick := func(info types.ContactInfo) string {
+		for _, n := range []string{info.FullName, info.BusinessName, info.PushName} {
+			if strings.TrimSpace(n) != "" {
+				return strings.TrimSpace(n)
+			}
+		}
+		return ""
+	}
+	// Nombre por teléfono y por LID, según cómo esté guardado el contacto.
+	byPhone := map[string]string{}
+	byLID := map[string]string{}
+	var phones []types.JID
+	for jid, info := range all {
+		n := pick(info)
+		switch jid.Server {
+		case types.DefaultUserServer:
+			phones = append(phones, jid.ToNonAD())
+			if n != "" {
+				byPhone[jid.User] = n
+			}
+		case types.HiddenUserServer:
+			if n != "" {
+				byLID[jid.User] = n
+			}
+		}
+	}
+	lidFor, err := client.Store.LIDs.GetManyLIDsForPNs(ctx, phones)
+	if err != nil {
+		logger.Warnf("syncContacts (lids): %v", err)
+		lidFor = map[types.JID]types.JID{}
+	}
+
+	tx, err := messageStore.db.Begin()
+	if err != nil {
+		return 0
+	}
+	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO contacts (user, phone, lid, name) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return 0
+	}
+	n := 0
+	for _, pn := range phones {
+		lid := lidFor[pn]
+		name := byPhone[pn.User]
+		if name == "" && !lid.IsEmpty() {
+			name = byLID[lid.User]
+		}
+		lidUser := ""
+		if !lid.IsEmpty() {
+			lidUser = lid.User
+		}
+		if name == "" && lidUser == "" {
+			continue // no aporta nada
+		}
+		stmt.Exec(pn.User, pn.User, nullIfEmpty(lidUser), nullIfEmpty(name))
+		n++
+		if lidUser != "" {
+			stmt.Exec(lidUser, pn.User, lidUser, nullIfEmpty(name))
+			n++
+		}
+	}
+	// Esta cuenta: que salga como "Yo" y no como un número.
+	if client.Store.ID != nil {
+		ownLID := ""
+		if !client.Store.LID.IsEmpty() {
+			ownLID = client.Store.LID.User
+		}
+		stmt.Exec(client.Store.ID.User, client.Store.ID.User, nullIfEmpty(ownLID), "Yo")
+		if ownLID != "" {
+			stmt.Exec(ownLID, client.Store.ID.User, ownLID, "Yo")
+		}
+	}
+	stmt.Close()
+	if err := tx.Commit(); err != nil {
+		logger.Warnf("syncContacts commit: %v", err)
+		return 0
+	}
+	return n
+}
+
 func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types.JID, chatJID string, conversation interface{}, sender string, logger waLog.Logger) string {
 	// First, check if chat already exists in database with a name
 	var existingName string
 	err := messageStore.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chatJID).Scan(&existingName)
-	if err == nil && existingName != "" {
-		// Chat exists with a name, use that
+	if err == nil && existingName != "" && (jid.Server == types.GroupServer || !isPlaceholderName(client, jid, existingName)) {
+		// Chat exists with a real name, use that
 		logger.Infof("Using existing chat name for %s: %s", chatJID, existingName)
 		return existingName
 	}
@@ -1523,17 +1732,21 @@ func GetChatName(client *whatsmeow.Client, messageStore *MessageStore, jid types
 		// This is an individual contact
 		logger.Infof("Getting name for contact: %s", chatJID)
 
-		// Just use contact info (full name)
-		contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
-		if err == nil && contact.FullName != "" {
-			name = contact.FullName
-		} else if sender != "" {
-			// Fallback to sender
-			name = sender
-		} else {
-			// Last fallback to JID
+		// Libreta de contactos, cruzando LID y teléfono.
+		resolved, phone := resolveContactName(client, jid)
+		switch {
+		case resolved != "":
+			name = resolved
+		case !phone.IsEmpty():
+			name = phone.User // el teléfono dice más que el LID
+		case existingName != "":
+			name = existingName // lo que había, aunque sea un número
+		default:
 			name = jid.User
 		}
+		// Nunca bautizar el chat con el remitente: si el primer mensaje era mío,
+		// el chat quedaba con MI número/LID como nombre.
+		_ = sender
 
 		logger.Infof("Using contact name: %s", name)
 	}

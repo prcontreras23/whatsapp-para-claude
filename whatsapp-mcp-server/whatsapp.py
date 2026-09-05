@@ -96,43 +96,50 @@ class MessageContext:
     before: List[Message]
     after: List[Message]
 
+def _es_solo_numero(texto: str) -> bool:
+    t = (texto or "").strip()
+    return t.isdigit() and len(t) >= 8
+
 def get_sender_name(sender_jid: str) -> str:
+    """Nombre para mostrar de un remitente.
+
+    `sender_jid` puede ser un JID completo o solo la parte de usuario, y esa
+    parte puede ser un teléfono o un LID (el identificador que WhatsApp usa
+    ahora en los grupos). Orden: libreta `contacts` que vuelca el bridge
+    (cruza LID ↔ teléfono ↔ nombre), luego el nombre del chat directo si es un
+    nombre de verdad, luego el teléfono si se conoce, y al final lo que llegó.
+    """
+    if not sender_jid:
+        return sender_jid
+    user = sender_jid.split('@')[0].split(':')[0]
     try:
         conn = sqlite3.connect(MESSAGES_DB_PATH)
         cursor = conn.cursor()
-        
-        # First try matching by exact JID
-        cursor.execute("""
-            SELECT name
-            FROM chats
-            WHERE jid = ?
-            LIMIT 1
-        """, (sender_jid,))
-        
-        result = cursor.fetchone()
-        
-        # If no result, try looking for the number within JIDs
-        if not result:
-            # Extract the phone number part if it's a JID
-            if '@' in sender_jid:
-                phone_part = sender_jid.split('@')[0]
-            else:
-                phone_part = sender_jid
-                
-            cursor.execute("""
-                SELECT name
-                FROM chats
-                WHERE jid LIKE ?
-                LIMIT 1
-            """, (f"%{phone_part}%",))
-            
-            result = cursor.fetchone()
-        
-        if result and result[0]:
-            return result[0]
-        else:
-            return sender_jid
-        
+
+        cursor.execute("SELECT name, phone, lid FROM contacts WHERE user = ? LIMIT 1", (user,))
+        row = cursor.fetchone()
+        phone = None
+        if row:
+            name, phone, lid = row
+            if name and not _es_solo_numero(name):
+                return name
+            # Sin nombre en la libreta: probar el chat directo por teléfono o por LID
+            for cand in filter(None, {phone, lid}):
+                cursor.execute("SELECT name FROM chats WHERE jid IN (?, ?) LIMIT 1",
+                               (f"{cand}@s.whatsapp.net", f"{cand}@lid"))
+                r = cursor.fetchone()
+                if r and r[0] and not _es_solo_numero(r[0]):
+                    return r[0]
+
+        # Chat directo con ese mismo identificador (coincidencia exacta, nunca LIKE:
+        # el LIKE cruzaba identificadores distintos y bautizaba a todos con el mismo número)
+        cursor.execute("SELECT name FROM chats WHERE jid IN (?, ?) LIMIT 1",
+                       (f"{user}@s.whatsapp.net", f"{user}@lid"))
+        r = cursor.fetchone()
+        if r and r[0] and not _es_solo_numero(r[0]):
+            return r[0]
+
+        return phone or user
     except sqlite3.Error as e:
         print(f"Database error while getting sender name: {e}")
         return sender_jid
