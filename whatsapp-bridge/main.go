@@ -176,12 +176,33 @@ func NewMessageStore() (*MessageStore, error) {
 	// Columnas agregadas después del esquema original. ALTER TABLE sobre una
 	// base ya poblada; las filas viejas quedan con NULL y no se pierde nada.
 	if err := ensureColumns(db, "messages", map[string]string{
-		"quoted_id":      "TEXT",
-		"quoted_sender":  "TEXT",
-		"quoted_content": "TEXT",
+		"quoted_id":        "TEXT",
+		"quoted_sender":    "TEXT",
+		"quoted_content":   "TEXT",
+		"edited_at":        "TIMESTAMP", // última edición del texto (content ya trae el texto nuevo)
+		"original_content": "TEXT",      // texto antes de la primera edición
+		"deleted_at":       "TIMESTAMP", // el remitente (o un admin) lo eliminó para todos
+		"deleted_by":       "TEXT",
 	}); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to migrate messages table: %v", err)
+	}
+
+	// Reacciones: una fila por (mensaje, quien reacciona). Quitar la reacción
+	// borra la fila; cambiarla la reemplaza.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS reactions (
+			message_id TEXT,
+			chat_jid TEXT,
+			sender TEXT,
+			emoji TEXT,
+			timestamp TIMESTAMP,
+			PRIMARY KEY (message_id, chat_jid, sender)
+		);
+		CREATE INDEX IF NOT EXISTS idx_reactions_msg ON reactions(chat_jid, message_id);
+	`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to create reactions table: %v", err)
 	}
 
 	return &MessageStore{db: db}, nil
@@ -249,6 +270,102 @@ func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, tim
 		nullIfEmpty(quoted.ID), nullIfEmpty(quoted.Sender), nullIfEmpty(quoted.Content),
 	)
 	return err
+}
+
+// StoreReaction guarda o quita la reacción de sender al mensaje. emoji vacío = la quitó.
+func (store *MessageStore) StoreReaction(messageID, chatJID, sender, emoji string, ts time.Time) error {
+	if emoji == "" {
+		_, err := store.db.Exec(`DELETE FROM reactions WHERE message_id = ? AND chat_jid = ? AND sender = ?`,
+			messageID, chatJID, sender)
+		return err
+	}
+	_, err := store.db.Exec(`INSERT OR REPLACE INTO reactions (message_id, chat_jid, sender, emoji, timestamp) VALUES (?, ?, ?, ?, ?)`,
+		messageID, chatJID, sender, emoji, ts.Format(dbTimeFormat))
+	return err
+}
+
+// ApplyEdit reemplaza el texto del mensaje y conserva el original la primera vez.
+// Devuelve cuántas filas tocó (0 = el mensaje editado no está en la base).
+func (store *MessageStore) ApplyEdit(messageID, chatJID, newContent string, ts time.Time) (int64, error) {
+	res, err := store.db.Exec(`UPDATE messages
+		SET original_content = COALESCE(original_content, content), content = ?, edited_at = ?
+		WHERE id = ? AND chat_jid = ?`,
+		newContent, ts.Format(dbTimeFormat), messageID, chatJID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// MarkDeleted marca el mensaje como eliminado para todos. El contenido se conserva.
+func (store *MessageStore) MarkDeleted(messageID, chatJID, deletedBy string, ts time.Time) (int64, error) {
+	res, err := store.db.Exec(`UPDATE messages SET deleted_at = ?, deleted_by = ? WHERE id = ? AND chat_jid = ?`,
+		ts.Format(dbTimeFormat), deletedBy, messageID, chatJID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// handleSpecialMessage procesa reacciones, ediciones y borrados. Devuelve true
+// si el mensaje era uno de esos (y por tanto no se guarda como mensaje normal).
+func handleSpecialMessage(messageStore *MessageStore, chatJID, sender string, ts time.Time, m *waProto.Message, logger waLog.Logger) bool {
+	if m == nil {
+		return false
+	}
+	if r := m.GetReactionMessage(); r != nil {
+		target := r.GetKey().GetID()
+		if target == "" {
+			return true
+		}
+		if err := messageStore.StoreReaction(target, chatJID, sender, r.GetText(), ts); err != nil {
+			logger.Warnf("Failed to store reaction: %v", err)
+		} else if r.GetText() != "" {
+			fmt.Printf("[%s] %s reaccionó %s a %s\n", ts.Format("2006-01-02 15:04:05"), sender, r.GetText(), target)
+		} else {
+			fmt.Printf("[%s] %s quitó su reacción a %s\n", ts.Format("2006-01-02 15:04:05"), sender, target)
+		}
+		return true
+	}
+	if pm := m.GetProtocolMessage(); pm != nil {
+		target := pm.GetKey().GetID()
+		switch pm.GetType() {
+		case waProto.ProtocolMessage_REVOKE:
+			if target == "" {
+				return true
+			}
+			n, err := messageStore.MarkDeleted(target, chatJID, sender, ts)
+			if err != nil {
+				logger.Warnf("Failed to mark message deleted: %v", err)
+			} else if n == 0 {
+				logger.Infof("Borrado de %s en %s: el mensaje no estaba en la base", target, chatJID)
+			} else {
+				fmt.Printf("[%s] %s eliminó el mensaje %s\n", ts.Format("2006-01-02 15:04:05"), sender, target)
+			}
+			return true
+		case waProto.ProtocolMessage_MESSAGE_EDIT:
+			if target == "" {
+				return true
+			}
+			newContent := extractTextContent(pm.GetEditedMessage())
+			if newContent == "" {
+				// Edición de un pie de foto u otro tipo sin texto plano: no hay nada que reemplazar.
+				return true
+			}
+			n, err := messageStore.ApplyEdit(target, chatJID, newContent, ts)
+			if err != nil {
+				logger.Warnf("Failed to apply edit: %v", err)
+			} else if n == 0 {
+				logger.Infof("Edición de %s en %s: el mensaje no estaba en la base", target, chatJID)
+			} else {
+				fmt.Printf("[%s] %s editó %s: %s\n", ts.Format("2006-01-02 15:04:05"), sender, target, newContent)
+			}
+			return true
+		}
+		// Otros ProtocolMessage (claves, ajustes efímeros...) no son mensajes: se ignoran.
+		return true
+	}
+	return false
 }
 
 func nullIfEmpty(s string) interface{} {
@@ -663,6 +780,12 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	// Save message to database
 	chatJID := msg.Info.Chat.String()
 	sender := msg.Info.Sender.User
+
+	// Reacciones, ediciones y borrados: se aplican sobre el mensaje al que
+	// apuntan y no cuentan como mensaje nuevo (ni mueven la fecha del chat).
+	if handleSpecialMessage(messageStore, chatJID, sender, msg.Info.Timestamp, msg.Message, logger) {
+		return
+	}
 
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
 	name := GetChatName(client, messageStore, msg.Info.Chat, chatJID, nil, sender, logger)
@@ -1421,6 +1544,27 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 			// Store messages
 			for _, msg := range messages {
 				if msg == nil || msg.Message == nil {
+					continue
+				}
+
+				// Reacciones (y algún borrado) que vienen dentro del historial.
+				if msg.Message.Message != nil && (msg.Message.Message.GetReactionMessage() != nil || msg.Message.Message.GetProtocolMessage() != nil) {
+					hsSender := jid.User
+					hsFromMe := false
+					if k := msg.Message.Key; k != nil {
+						hsFromMe = k.GetFromMe()
+						if !hsFromMe && k.GetParticipant() != "" {
+							if pj, err := types.ParseJID(k.GetParticipant()); err == nil {
+								hsSender = pj.User
+							} else {
+								hsSender = k.GetParticipant()
+							}
+						} else if hsFromMe && client.Store.ID != nil {
+							hsSender = client.Store.ID.User
+						}
+					}
+					hsTS := time.Unix(int64(msg.Message.GetMessageTimestamp()), 0)
+					handleSpecialMessage(messageStore, chatJID, hsSender, hsTS, msg.Message.Message, logger)
 					continue
 				}
 

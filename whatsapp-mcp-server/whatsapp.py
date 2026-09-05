@@ -65,6 +65,10 @@ class Message:
     quoted_id: Optional[str] = None
     quoted_sender: Optional[str] = None
     quoted_content: Optional[str] = None
+    # Edición / borrado para todos / reacciones ("emoji sender, emoji sender")
+    edited_at: Optional[str] = None
+    deleted_at: Optional[str] = None
+    reactions: Optional[str] = None
 
 @dataclass
 class Chat:
@@ -151,7 +155,18 @@ def format_message(message: Message, show_chat_info: bool = True) -> None:
     
     try:
         sender_name = get_sender_name(message.sender) if not message.is_from_me else "Me"
-        output += f"From: {sender_name}: {content_prefix}{message.content}\n"
+        marks = ""
+        if getattr(message, 'deleted_at', None):
+            marks += "[ELIMINADO para todos] "
+        if getattr(message, 'edited_at', None):
+            marks += "[editado] "
+        output += f"From: {sender_name}: {marks}{content_prefix}{message.content}\n"
+        if getattr(message, 'reactions', None):
+            partes = []
+            for item in message.reactions.split(", "):
+                emoji, _, who = item.partition(" ")
+                partes.append(f"{emoji} {get_sender_name(who) if who else '?'}")
+            output += f"    ♥ reacciones: {', '.join(partes)}\n"
         if getattr(message, 'quoted_id', None):
             quoted_sender = get_sender_name(message.quoted_sender) if message.quoted_sender else "?"
             quoted_text = (message.quoted_content or "").replace("\n", " ")
@@ -190,7 +205,7 @@ def list_messages(
         cursor = conn.cursor()
         
         # Build base query
-        query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type, messages.quoted_id, messages.quoted_sender, messages.quoted_content FROM messages"]
+        query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type, messages.quoted_id, messages.quoted_sender, messages.quoted_content, messages.edited_at, messages.deleted_at, (SELECT group_concat(r.emoji || ' ' || r.sender, ', ') FROM reactions r WHERE r.message_id = messages.id AND r.chat_jid = messages.chat_jid) FROM messages"]
         query_parts.append("JOIN chats ON messages.chat_jid = chats.jid")
         where_clauses = []
         params = []
@@ -251,7 +266,10 @@ def list_messages(
                 media_type=msg[7],
                 quoted_id=msg[8],
                 quoted_sender=msg[9],
-                quoted_content=msg[10]
+                quoted_content=msg[10],
+                edited_at=msg[11],
+                deleted_at=msg[12],
+                reactions=msg[13]
             )
             result.append(message)
             
@@ -290,7 +308,8 @@ def get_message_context(
         # Get the target message first
         cursor.execute("""
             SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.chat_jid, messages.media_type,
-                   messages.quoted_id, messages.quoted_sender, messages.quoted_content
+                   messages.quoted_id, messages.quoted_sender, messages.quoted_content,
+                   messages.edited_at, messages.deleted_at, (SELECT group_concat(r.emoji || ' ' || r.sender, ', ') FROM reactions r WHERE r.message_id = messages.id AND r.chat_jid = messages.chat_jid)
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.id = ?
@@ -311,13 +330,17 @@ def get_message_context(
             media_type=msg_data[8],
             quoted_id=msg_data[9],
             quoted_sender=msg_data[10],
-            quoted_content=msg_data[11]
+            quoted_content=msg_data[11],
+            edited_at=msg_data[12],
+            deleted_at=msg_data[13],
+            reactions=msg_data[14]
         )
         
         # Get messages before
         cursor.execute("""
             SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type,
-                   messages.quoted_id, messages.quoted_sender, messages.quoted_content
+                   messages.quoted_id, messages.quoted_sender, messages.quoted_content,
+                   messages.edited_at, messages.deleted_at, (SELECT group_concat(r.emoji || ' ' || r.sender, ', ') FROM reactions r WHERE r.message_id = messages.id AND r.chat_jid = messages.chat_jid)
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp < ?
@@ -338,13 +361,17 @@ def get_message_context(
                 media_type=msg[7],
                 quoted_id=msg[8],
                 quoted_sender=msg[9],
-                quoted_content=msg[10]
+                quoted_content=msg[10],
+                edited_at=msg[11],
+                deleted_at=msg[12],
+                reactions=msg[13]
             ))
         
         # Get messages after
         cursor.execute("""
             SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type,
-                   messages.quoted_id, messages.quoted_sender, messages.quoted_content
+                   messages.quoted_id, messages.quoted_sender, messages.quoted_content,
+                   messages.edited_at, messages.deleted_at, (SELECT group_concat(r.emoji || ' ' || r.sender, ', ') FROM reactions r WHERE r.message_id = messages.id AND r.chat_jid = messages.chat_jid)
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp > ?
@@ -365,7 +392,10 @@ def get_message_context(
                 media_type=msg[7],
                 quoted_id=msg[8],
                 quoted_sender=msg[9],
-                quoted_content=msg[10]
+                quoted_content=msg[10],
+                edited_at=msg[11],
+                deleted_at=msg[12],
+                reactions=msg[13]
             ))
         
         return MessageContext(
