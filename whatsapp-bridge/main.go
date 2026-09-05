@@ -1589,6 +1589,36 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 					continue
 				}
 
+				// Reacciones que el historial trae adjuntas a cada mensaje (WebMessageInfo.Reactions).
+				if msgID := msg.Message.GetKey().GetID(); msgID != "" {
+					for _, re := range msg.Message.GetReactions() {
+						if re == nil || re.GetText() == "" {
+							continue
+						}
+						reactor := jid.User
+						if k := re.GetKey(); k != nil {
+							if k.GetFromMe() && client.Store.ID != nil {
+								reactor = client.Store.ID.User
+							} else if k.GetParticipant() != "" {
+								if pj, err := types.ParseJID(k.GetParticipant()); err == nil {
+									reactor = pj.User
+								} else {
+									reactor = k.GetParticipant()
+								}
+							}
+						}
+						reTS := time.UnixMilli(re.GetSenderTimestampMS())
+						if re.GetSenderTimestampMS() == 0 {
+							reTS = time.Unix(int64(msg.Message.GetMessageTimestamp()), 0)
+						}
+						if err := messageStore.StoreReaction(msgID, chatJID, reactor, re.GetText(), reTS); err != nil {
+							logger.Warnf("Failed to store history reaction: %v", err)
+						} else {
+							fmt.Printf("[%s] %s reaccionó %s a %s (historial)\n", reTS.Format("2006-01-02 15:04:05"), reactor, re.GetText(), msgID)
+						}
+					}
+				}
+
 				// Reacciones (y algún borrado) que vienen dentro del historial.
 				if msg.Message.Message != nil && (msg.Message.Message.GetReactionMessage() != nil || msg.Message.Message.GetProtocolMessage() != nil) {
 					hsSender := jid.User
