@@ -195,9 +195,9 @@ Los requisitos se resuelven en `lib-requisitos.sh` (Mac) y `lib-requisitos.ps1` 
 
 ### Lo que Claude puede hacer
 
-`search_contacts` · `list_messages` · `list_chats` · `get_chat` · `get_direct_chat_by_contact` · `get_contact_chats` · `get_last_interaction` · `get_message_context` · `send_message` · `send_file` · `send_audio_message` · `download_media` · `mark_read`
+`search_contacts` · `list_messages` · `list_chats` · `get_chat` · `get_direct_chat_by_contact` · `get_contact_chats` · `get_last_interaction` · `get_message_context` · `send_message` · `send_file` · `send_audio_message` · `download_media` · `mark_read` · `load_older_messages`
 
-Cuando un mensaje responde a otro (cita de WhatsApp), Claude ve también a qué mensaje responde y de quién era. También ve las reacciones que recibió cada mensaje, si fue editado (y qué decía antes) y si el remitente lo eliminó para todos. `mark_read` marca como leídos los últimos mensajes de un chat: el remitente ve las palomitas azules, así que Claude solo debe usarlo cuando tú se lo pidas.
+Cuando un mensaje responde a otro (cita de WhatsApp), Claude ve también a qué mensaje responde y de quién era. También ve las reacciones que recibió cada mensaje, si fue editado (y qué decía antes) y si el remitente lo eliminó para todos. Y como WhatsApp entrega al vincular solo una ventana de historial, `load_older_messages` le pide al teléfono los mensajes anteriores de un chat, por páginas, cuando Claude necesita ir más atrás. `mark_read` marca como leídos los últimos mensajes de un chat: el remitente ve las palomitas azules, así que Claude solo debe usarlo cuando tú se lo pidas.
 
 ---
 

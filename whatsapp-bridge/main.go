@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -1203,6 +1204,38 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		})
 	})
 
+	http.HandleFunc("/api/history", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Method not allowed"})
+			return
+		}
+		var req struct {
+			ChatJID     string `json:"chat_jid"`
+			Count       int    `json:"count"`
+			WaitSeconds int    `json:"wait_seconds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChatJID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "chat_jid is required"})
+			return
+		}
+		if req.WaitSeconds <= 0 {
+			req.WaitSeconds = 20
+		}
+		if req.WaitSeconds > 120 {
+			req.WaitSeconds = 120
+		}
+		res, err := requestOlderHistory(client, messageStore, req.ChatJID, req.Count, time.Duration(req.WaitSeconds)*time.Second)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(res)
+	})
+
 	http.HandleFunc("/api/download", func(w http.ResponseWriter, r *http.Request) {
 		// Only allow POST requests
 		if r.Method != http.MethodPost {
@@ -1326,6 +1359,15 @@ func main() {
 			handleMessage(client, messageStore, v, logger)
 
 		case *events.HistorySync:
+			if v.Data.GetSyncType().String() == "ON_DEMAND" {
+				defer func() {
+					for _, conv := range v.Data.GetConversations() {
+						if conv.ID != nil {
+							onDemandNotify(*conv.ID)
+						}
+					}
+				}()
+			}
 			// Process history sync events
 			handleHistorySync(client, messageStore, v, logger)
 
@@ -1663,40 +1705,112 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 	fmt.Printf("History sync complete. Stored %d messages.\n", syncedCount)
 }
 
-// Request history sync from the server
-func requestHistorySync(client *whatsmeow.Client) {
-	if client == nil {
-		fmt.Println("Client is not initialized. Cannot request history sync.")
-		return
-	}
+// Historial bajo demanda. WhatsApp entrega al vincular solo una ventana de
+// historial; lo anterior hay que pedírselo al teléfono principal, chat por
+// chat y por páginas, a partir del mensaje más viejo que ya tenemos. La
+// respuesta llega asíncrona como events.HistorySync de tipo ON_DEMAND, y el
+// handler normal la guarda. Aquí solo registramos quién está esperando.
+var (
+	onDemandMu      sync.Mutex
+	onDemandWaiters = map[string][]chan struct{}{}
+)
 
-	if !client.IsConnected() {
-		fmt.Println("Client is not connected. Please ensure you are connected to WhatsApp first.")
-		return
-	}
+func onDemandWait(chatJID string) chan struct{} {
+	ch := make(chan struct{}, 1)
+	onDemandMu.Lock()
+	onDemandWaiters[chatJID] = append(onDemandWaiters[chatJID], ch)
+	onDemandMu.Unlock()
+	return ch
+}
 
+func onDemandNotify(chatJID string) {
+	onDemandMu.Lock()
+	chans := onDemandWaiters[chatJID]
+	delete(onDemandWaiters, chatJID)
+	onDemandMu.Unlock()
+	for _, ch := range chans {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// requestOlderHistory pide `count` mensajes anteriores al más viejo que la base
+// tiene de chatJID y espera hasta `wait` a que lleguen. Devuelve cuántos
+// mensajes nuevos quedaron guardados y la fecha del más viejo antes y después.
+func requestOlderHistory(client *whatsmeow.Client, messageStore *MessageStore, chatJID string, count int, wait time.Duration) (map[string]interface{}, error) {
+	if client == nil || !client.IsConnected() {
+		return nil, fmt.Errorf("not connected to WhatsApp")
+	}
 	if client.Store.ID == nil {
-		fmt.Println("Client is not logged in. Please scan the QR code first.")
-		return
+		return nil, fmt.Errorf("not logged in")
 	}
-
-	// Build and send a history sync request
-	historyMsg := client.BuildHistorySyncRequest(nil, 100)
-	if historyMsg == nil {
-		fmt.Println("Failed to build history sync request.")
-		return
-	}
-
-	_, err := client.SendMessage(context.Background(), types.JID{
-		Server: "s.whatsapp.net",
-		User:   "status",
-	}, historyMsg)
-
+	chat, err := types.ParseJID(chatJID)
 	if err != nil {
-		fmt.Printf("Failed to request history sync: %v\n", err)
-	} else {
-		fmt.Println("History sync requested. Waiting for server response...")
+		return nil, fmt.Errorf("bad chat jid: %v", err)
 	}
+	if count <= 0 {
+		count = 50
+	}
+	if count > 500 {
+		count = 500
+	}
+
+	var oldestID, oldestSender string
+	var oldestTS time.Time
+	var oldestFromMe bool
+	err = messageStore.db.QueryRow(
+		`SELECT id, sender, timestamp, is_from_me FROM messages WHERE chat_jid = ? ORDER BY timestamp ASC LIMIT 1`, chatJID,
+	).Scan(&oldestID, &oldestSender, &oldestTS, &oldestFromMe)
+	if err != nil {
+		return nil, fmt.Errorf("no known messages for %s, nothing to page from (%v)", chatJID, err)
+	}
+	var before int
+	_ = messageStore.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE chat_jid = ?`, chatJID).Scan(&before)
+
+	senderJID := types.NewJID(oldestSender, types.DefaultUserServer)
+	if strings.Contains(oldestSender, "@") {
+		if pj, perr := types.ParseJID(oldestSender); perr == nil {
+			senderJID = pj
+		}
+	}
+	info := &types.MessageInfo{
+		MessageSource: types.MessageSource{Chat: chat, Sender: senderJID, IsFromMe: oldestFromMe},
+		ID:            oldestID,
+		Timestamp:     oldestTS,
+	}
+
+	waiter := onDemandWait(chatJID)
+	if _, err := client.SendPeerMessage(context.Background(), client.BuildHistorySyncRequest(info, count)); err != nil {
+		return nil, fmt.Errorf("failed to request history: %v", err)
+	}
+	fmt.Printf("Historial pedido: %d mensajes de %s anteriores a %s\n", count, chatJID, oldestTS.Format("2006-01-02 15:04:05"))
+
+	completed := false
+	if wait > 0 {
+		select {
+		case <-waiter:
+			completed = true
+		case <-time.After(wait):
+		}
+	}
+
+	var after int
+	var newOldest time.Time
+	_ = messageStore.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE chat_jid = ?`, chatJID).Scan(&after)
+	_ = messageStore.db.QueryRow(`SELECT timestamp FROM messages WHERE chat_jid = ? ORDER BY timestamp ASC LIMIT 1`, chatJID).Scan(&newOldest)
+
+	return map[string]interface{}{
+		"success":       true,
+		"chat_jid":      chatJID,
+		"requested":     count,
+		"completed":     completed,
+		"stored_new":    after - before,
+		"total_now":     after,
+		"oldest_before": oldestTS.Format(dbTimeFormat),
+		"oldest_after":  newOldest.Format(dbTimeFormat),
+	}, nil
 }
 
 // analyzeOggOpus tries to extract duration and generate a simple waveform from an Ogg Opus file

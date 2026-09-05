@@ -769,6 +769,31 @@ def mark_read(chat_jids: List[str], limit: int = 50, dry_run: bool = False) -> d
     except json.JSONDecodeError:
         return {"success": False, "message": f"Error parsing response: {response.text}"}
 
+def load_older_messages(chat_jid: str, count: int = 50, wait_seconds: int = 20) -> dict:
+    """Pide al teléfono los mensajes anteriores al más viejo que la base tiene de un chat.
+
+    WhatsApp entrega al vincular solo una ventana de historial; lo anterior hay
+    que pedirlo por páginas. Cada llamada trae hasta `count` mensajes más
+    antiguos y espera hasta `wait_seconds` a que lleguen. El teléfono principal
+    tiene que estar encendido y con conexión, porque es quien los envía.
+    """
+    if not chat_jid:
+        return {"success": False, "message": "Debes indicar el chat_jid"}
+    try:
+        response = requests.post(
+            f"{WHATSAPP_API_BASE_URL}/history",
+            json={"chat_jid": chat_jid, "count": count, "wait_seconds": wait_seconds},
+            timeout=wait_seconds + 30,
+        )
+        if response.status_code != 200:
+            try:
+                return response.json()
+            except ValueError:
+                return {"success": False, "message": f"Error: HTTP {response.status_code} - {response.text}"}
+        return response.json()
+    except requests.RequestException as e:
+        return {"success": False, "message": f"Request error: {e}"}
+
 def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
     try:
         # Validate input

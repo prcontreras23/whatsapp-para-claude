@@ -13,7 +13,8 @@ from whatsapp import (
     send_file as whatsapp_send_file,
     send_audio_message as whatsapp_audio_voice_message,
     download_media as whatsapp_download_media,
-    mark_read as whatsapp_mark_read
+    mark_read as whatsapp_mark_read,
+    load_older_messages as whatsapp_load_older_messages
 )
 
 # Initialize FastMCP server
@@ -266,6 +267,26 @@ def mark_read(chat_jids: List[str], limit: int = 50, dry_run: bool = False) -> D
         A dictionary with success status, total_marked and a per-chat breakdown
     """
     return whatsapp_mark_read(chat_jids, limit=limit, dry_run=dry_run)
+
+@mcp.tool()
+def load_older_messages(chat_jid: str, count: int = 50, wait_seconds: int = 20) -> Dict[str, Any]:
+    """Fetch older history for a chat from the user's phone, before the oldest message already stored.
+
+    The local database only holds the history window WhatsApp delivered when the
+    device was linked (roughly from mid-May 2026 for most chats). Call this when
+    list_messages runs out of older messages for a chat. Each call pages one
+    batch further back; call it again to keep going. The phone must be online.
+
+    Args:
+        chat_jid: The chat JID (e.g. "123@s.whatsapp.net" or "123@g.us")
+        count: How many older messages to request (default 50, max 500)
+        wait_seconds: How long to wait for the phone to answer (default 20, max 120)
+
+    Returns:
+        success, completed (whether the phone answered in time), stored_new (messages added),
+        total_now, oldest_before and oldest_after timestamps
+    """
+    return whatsapp_load_older_messages(chat_jid, count=count, wait_seconds=wait_seconds)
 
 if __name__ == "__main__":
     # Initialize and run the server
