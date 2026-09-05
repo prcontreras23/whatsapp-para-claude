@@ -61,6 +61,10 @@ class Message:
     id: str
     chat_name: Optional[str] = None
     media_type: Optional[str] = None
+    # Mensaje al que este responde (cita de WhatsApp), si aplica
+    quoted_id: Optional[str] = None
+    quoted_sender: Optional[str] = None
+    quoted_content: Optional[str] = None
 
 @dataclass
 class Chat:
@@ -148,6 +152,12 @@ def format_message(message: Message, show_chat_info: bool = True) -> None:
     try:
         sender_name = get_sender_name(message.sender) if not message.is_from_me else "Me"
         output += f"From: {sender_name}: {content_prefix}{message.content}\n"
+        if getattr(message, 'quoted_id', None):
+            quoted_sender = get_sender_name(message.quoted_sender) if message.quoted_sender else "?"
+            quoted_text = (message.quoted_content or "").replace("\n", " ")
+            if len(quoted_text) > 120:
+                quoted_text = quoted_text[:117] + "..."
+            output += f"    ↳ en respuesta a {quoted_sender} (ID {message.quoted_id}): {quoted_text}\n"
     except Exception as e:
         print(f"Error formatting message: {e}")
     return output
@@ -180,7 +190,7 @@ def list_messages(
         cursor = conn.cursor()
         
         # Build base query
-        query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type FROM messages"]
+        query_parts = ["SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type, messages.quoted_id, messages.quoted_sender, messages.quoted_content FROM messages"]
         query_parts.append("JOIN chats ON messages.chat_jid = chats.jid")
         where_clauses = []
         params = []
@@ -238,7 +248,10 @@ def list_messages(
                 is_from_me=msg[4],
                 chat_jid=msg[5],
                 id=msg[6],
-                media_type=msg[7]
+                media_type=msg[7],
+                quoted_id=msg[8],
+                quoted_sender=msg[9],
+                quoted_content=msg[10]
             )
             result.append(message)
             
@@ -276,7 +289,8 @@ def get_message_context(
         
         # Get the target message first
         cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.chat_jid, messages.media_type
+            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.chat_jid, messages.media_type,
+                   messages.quoted_id, messages.quoted_sender, messages.quoted_content
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.id = ?
@@ -294,12 +308,16 @@ def get_message_context(
             is_from_me=msg_data[4],
             chat_jid=msg_data[5],
             id=msg_data[6],
-            media_type=msg_data[8]
+            media_type=msg_data[8],
+            quoted_id=msg_data[9],
+            quoted_sender=msg_data[10],
+            quoted_content=msg_data[11]
         )
         
         # Get messages before
         cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
+            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type,
+                   messages.quoted_id, messages.quoted_sender, messages.quoted_content
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp < ?
@@ -317,12 +335,16 @@ def get_message_context(
                 is_from_me=msg[4],
                 chat_jid=msg[5],
                 id=msg[6],
-                media_type=msg[7]
+                media_type=msg[7],
+                quoted_id=msg[8],
+                quoted_sender=msg[9],
+                quoted_content=msg[10]
             ))
         
         # Get messages after
         cursor.execute("""
-            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type
+            SELECT messages.timestamp, messages.sender, chats.name, messages.content, messages.is_from_me, chats.jid, messages.id, messages.media_type,
+                   messages.quoted_id, messages.quoted_sender, messages.quoted_content
             FROM messages
             JOIN chats ON messages.chat_jid = chats.jid
             WHERE messages.chat_jid = ? AND messages.timestamp > ?
@@ -340,7 +362,10 @@ def get_message_context(
                 is_from_me=msg[4],
                 chat_jid=msg[5],
                 id=msg[6],
-                media_type=msg[7]
+                media_type=msg[7],
+                quoted_id=msg[8],
+                quoted_sender=msg[9],
+                quoted_content=msg[10]
             ))
         
         return MessageContext(
@@ -690,6 +715,29 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
         return False, f"Error parsing response: {response.text}"
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
+
+def mark_read(chat_jids: List[str], limit: int = 50, dry_run: bool = False) -> dict:
+    """Marca como leídos los últimos mensajes recibidos de uno o varios chats.
+
+    Llama al endpoint /api/markread del bridge, que envía los recibos de lectura
+    a WhatsApp (el remitente ve las palomitas azules). Con dry_run=True solo
+    cuenta cuántos marcaría sin mandar nada.
+    """
+    if not chat_jids:
+        return {"success": False, "message": "Debes indicar al menos un chat_jid"}
+    try:
+        response = requests.post(
+            f"{WHATSAPP_API_BASE_URL}/markread",
+            json={"chat_jids": chat_jids, "limit": limit, "dry_run": dry_run},
+            timeout=30,
+        )
+        if response.status_code != 200:
+            return {"success": False, "message": f"Error: HTTP {response.status_code} - {response.text}"}
+        return response.json()
+    except requests.RequestException as e:
+        return {"success": False, "message": f"Request error: {e}"}
+    except json.JSONDecodeError:
+        return {"success": False, "message": f"Error parsing response: {response.text}"}
 
 def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
     try:

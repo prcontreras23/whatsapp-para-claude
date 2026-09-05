@@ -195,7 +195,9 @@ Los requisitos se resuelven en `lib-requisitos.sh` (Mac) y `lib-requisitos.ps1` 
 
 ### Lo que Claude puede hacer
 
-`search_contacts` · `list_messages` · `list_chats` · `get_chat` · `get_direct_chat_by_contact` · `get_contact_chats` · `get_last_interaction` · `get_message_context` · `send_message` · `send_file` · `send_audio_message` · `download_media`
+`search_contacts` · `list_messages` · `list_chats` · `get_chat` · `get_direct_chat_by_contact` · `get_contact_chats` · `get_last_interaction` · `get_message_context` · `send_message` · `send_file` · `send_audio_message` · `download_media` · `mark_read`
+
+Cuando un mensaje responde a otro (cita de WhatsApp), Claude ve también a qué mensaje responde y de quién era. `mark_read` marca como leídos los últimos mensajes de un chat: el remitente ve las palomitas azules, así que Claude solo debe usarlo cuando tú se lo pidas.
 
 ---
 

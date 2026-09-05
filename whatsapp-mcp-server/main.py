@@ -12,7 +12,8 @@ from whatsapp import (
     send_message as whatsapp_send_message,
     send_file as whatsapp_send_file,
     send_audio_message as whatsapp_audio_voice_message,
-    download_media as whatsapp_download_media
+    download_media as whatsapp_download_media,
+    mark_read as whatsapp_mark_read
 )
 
 # Initialize FastMCP server
@@ -247,6 +248,24 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
             "success": False,
             "message": "Failed to download media"
         }
+
+@mcp.tool()
+def mark_read(chat_jids: List[str], limit: int = 50, dry_run: bool = False) -> Dict[str, Any]:
+    """Mark the latest received messages of one or more chats as read.
+
+    Sends read receipts to WhatsApp, so the senders see blue ticks — this is
+    visible to other people. Use it after Francis has actually reviewed the
+    chat (or asked for it), not just because the messages were fetched.
+
+    Args:
+        chat_jids: List of chat JIDs to mark as read (e.g. ["123@s.whatsapp.net", "456@g.us"])
+        limit: How many of the most recent received messages per chat to mark (default 50)
+        dry_run: If True, only report how many messages would be marked, without sending anything
+
+    Returns:
+        A dictionary with success status, total_marked and a per-chat breakdown
+    """
+    return whatsapp_mark_read(chat_jids, limit=limit, dry_run=dry_run)
 
 if __name__ == "__main__":
     # Initialize and run the server
