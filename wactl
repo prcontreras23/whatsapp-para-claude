@@ -238,6 +238,8 @@ cmd_logs() {
   tail -n "$lineas" "$log"
 }
 
+# claude (Bun) se cae con «EINVAL: invalid argument, kqueue» si su entrada es /dev/tty,
+# y el instalador corre con /dev/tty como entrada: por eso cada llamada lleva < /dev/null.
 cmd_mcp() {
   local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
   cargar "$n"
@@ -247,7 +249,7 @@ cmd_mcp() {
     --env WHATSAPP_API_BASE_URL="$WHATSAPP_API_BASE_URL" \
     --env WHATSAPP_MESSAGES_DB="$WHATSAPP_MESSAGES_DB" \
     --env WHATSAPP_MCP_NAME="$WHATSAPP_MCP_NAME" \
-    -- "$uv" --directory "$MCP_SERVER_DIR" run main.py \
+    -- "$uv" --directory "$MCP_SERVER_DIR" run main.py < /dev/null \
     && verde "Listo. Reinicia Claude Code para que aparezcan las herramientas de '$n'."
 }
 
@@ -313,7 +315,7 @@ cmd_remove() {
   cmd_stop "$n" >/dev/null 2>&1
   local plist="$LAUNCH_AGENTS/$PLIST_PREFIX.$n.plist"
   [[ -f "$plist" ]] && { launchctl unload "$plist" 2>/dev/null; rm -f "$plist"; }
-  claude mcp remove "$WHATSAPP_MCP_NAME" --scope user 2>/dev/null
+  claude mcp remove "$WHATSAPP_MCP_NAME" --scope user < /dev/null 2>/dev/null
   rm -rf "$INSTANCES_DIR/$n" "$(env_file "$n")"
   verde "Instancia '$n' eliminada"
 }

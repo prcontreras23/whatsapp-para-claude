@@ -228,8 +228,13 @@ paso "8. Dejando todo funcionando"
 "$WACTL" autostart "$INSTANCIA" >/dev/null 2>&1 && ok "arrancará solo al encender la Mac"
 
 if command -v claude >/dev/null 2>&1; then
-  "$WACTL" mcp "$INSTANCIA" >/dev/null 2>&1 && ok "conectado con Claude"
-  MCP_OK=true
+  if "$WACTL" mcp "$INSTANCIA" >/dev/null 2>&1 && claude mcp get "whatsapp-$INSTANCIA" < /dev/null >/dev/null 2>&1; then
+    ok "conectado con Claude"
+    MCP_OK=true
+  else
+    info "no se pudo registrar en Claude Code; corre después:  wactl mcp $INSTANCIA"
+    MCP_OK=false
+  fi
 else
   info "no encontré Claude Code instalado"
   MCP_OK=false
