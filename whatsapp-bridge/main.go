@@ -616,10 +616,28 @@ func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, r
 			mediaType = whatsmeow.MediaVideo
 			mimeType = "video/quicktime"
 
-		// Document types (for any other file type)
+		// Document types (for any other file type). WhatsApp decide la vista
+		// previa y el icono por el mimetype: con octet-stream un PDF llega como
+		// archivo genérico.
 		default:
 			mediaType = whatsmeow.MediaDocument
-			mimeType = "application/octet-stream"
+			docMimes := map[string]string{
+				"pdf":  "application/pdf",
+				"doc":  "application/msword",
+				"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+				"xls":  "application/vnd.ms-excel",
+				"xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+				"ppt":  "application/vnd.ms-powerpoint",
+				"pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+				"txt":  "text/plain",
+				"csv":  "text/csv",
+				"zip":  "application/zip",
+			}
+			if m, ok := docMimes[fileExt]; ok {
+				mimeType = m
+			} else {
+				mimeType = "application/octet-stream"
+			}
 		}
 
 		// Upload media to WhatsApp servers
@@ -692,8 +710,10 @@ func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, r
 			sentURL, sentMediaKey, sentFileSHA256, sentFileEncSHA256, sentFileLength = resp.URL, resp.MediaKey, resp.FileSHA256, resp.FileEncSHA256, resp.FileLength
 		case whatsmeow.MediaDocument:
 			docTitle := mediaPath[strings.LastIndex(mediaPath, "/")+1:]
+			// Sin FileName el documento llega como «Untitled»
 			msg.DocumentMessage = &waProto.DocumentMessage{
 				Title:         proto.String(docTitle),
+				FileName:      proto.String(docTitle),
 				Caption:       proto.String(message),
 				Mimetype:      proto.String(mimeType),
 				URL:           &resp.URL,
@@ -1101,6 +1121,61 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 			Success: success,
 			Message: message,
 		})
+	})
+
+	// Handler for leaving groups. Con dry_run solo devuelve el nombre de cada grupo.
+	http.HandleFunc("/api/leavegroup", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Method not allowed"})
+			return
+		}
+
+		var req struct {
+			GroupJIDs []string `json:"group_jids"`
+			DryRun    bool     `json:"dry_run"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "message": "Invalid request"})
+			return
+		}
+
+		type groupResult struct {
+			GroupJID string `json:"group_jid"`
+			Name     string `json:"name,omitempty"`
+			Left     bool   `json:"left"`
+			Error    string `json:"error,omitempty"`
+		}
+		results := []groupResult{}
+
+		for _, groupJID := range req.GroupJIDs {
+			res := groupResult{GroupJID: groupJID}
+			jid, err := types.ParseJID(groupJID)
+			if err != nil || jid.Server != types.GroupServer {
+				res.Error = "no es un JID de grupo (@g.us)"
+				results = append(results, res)
+				continue
+			}
+			info, err := client.GetGroupInfo(context.Background(), jid)
+			if err != nil {
+				res.Error = fmt.Sprintf("no se pudo leer el grupo: %v", err)
+				results = append(results, res)
+				continue
+			}
+			res.Name = info.Name
+			if !req.DryRun {
+				if err := client.LeaveGroup(context.Background(), jid); err != nil {
+					res.Error = fmt.Sprintf("no se pudo salir: %v", err)
+				} else {
+					res.Left = true
+				}
+			}
+			results = append(results, res)
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "dry_run": req.DryRun, "results": results})
 	})
 
 	// Handler for downloading media
