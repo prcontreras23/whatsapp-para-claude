@@ -241,13 +241,36 @@ function Cmd-Mcp($n) {
   $cfg = Cargar $n
   $uv = (Get-Command uv -ErrorAction SilentlyContinue).Source
   if (-not $uv) { Morir "no encuentro uv" }
+  if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { Morir "no encuentro Claude Code" }
+
+  # Windows PowerShell 5.1 se traga el "--" al llamar programas externos, asi
+  # que "claude mcp add ... -- uv --directory ..." llegaba roto y el registro
+  # fallaba sin avisar. Se arma un .cmd con todo dentro y se registra ese, sin
+  # argumentos con guion. Va con "cmd /c" porque Node no lanza un .cmd directo.
+  $dir = Join-Path $InstancesDir $n
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $lanzador = Join-Path $dir "mcp.cmd"
+  @(
+    "@echo off",
+    "set ""WHATSAPP_API_BASE_URL=$($cfg.WHATSAPP_API_BASE_URL)""",
+    "set ""WHATSAPP_MESSAGES_DB=$($cfg.WHATSAPP_MESSAGES_DB)""",
+    "set ""WHATSAPP_MCP_NAME=$($cfg.WHATSAPP_MCP_NAME)""",
+    """$uv"" --directory ""$McpServerDir"" run main.py"
+  ) | ForEach-Object {
+    # Las rutas van como %USERPROFILE% para que un nombre de usuario con tilde
+    # no se dane al escribir el .cmd en ASCII.
+    $_.Replace($env:USERPROFILE, '%USERPROFILE%')
+  } | Set-Content -Path $lanzador -Encoding ASCII
+
   Write-Host "Registrando '$($cfg.WHATSAPP_MCP_NAME)' en Claude Code..."
-  & claude mcp add $cfg.WHATSAPP_MCP_NAME --scope user `
-      --env "WHATSAPP_API_BASE_URL=$($cfg.WHATSAPP_API_BASE_URL)" `
-      --env "WHATSAPP_MESSAGES_DB=$($cfg.WHATSAPP_MESSAGES_DB)" `
-      --env "WHATSAPP_MCP_NAME=$($cfg.WHATSAPP_MCP_NAME)" `
-      -- $uv --directory $McpServerDir run main.py
-  if ($LASTEXITCODE -eq 0) { Ok "Listo. Reinicia Claude Code para ver las herramientas de '$n'." }
+  & claude mcp remove $cfg.WHATSAPP_MCP_NAME --scope user 2>$null | Out-Null
+  & claude mcp add $cfg.WHATSAPP_MCP_NAME --scope user cmd /c $lanzador
+  if ($LASTEXITCODE -ne 0) { Morir "Claude Code no acepto el registro de '$($cfg.WHATSAPP_MCP_NAME)'" }
+
+  # Se confirma que quedo registrado, en vez de darlo por hecho.
+  & claude mcp get $cfg.WHATSAPP_MCP_NAME 2>$null | Out-Null
+  if ($LASTEXITCODE -ne 0) { Morir "'$($cfg.WHATSAPP_MCP_NAME)' no aparece en Claude Code despues de registrarlo" }
+  Ok "Listo. Reinicia Claude Code para ver las herramientas de '$n'."
 }
 
 function Cmd-Autostart($n) {

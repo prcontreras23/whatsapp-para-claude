@@ -299,9 +299,11 @@ Paso "8. Dejando todo funcionando"
 Ok "arrancara solo al encender la computadora"
 
 $mcpOk = $false
+$mcpError = ""
 if (Tiene claude) {
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $Wactl mcp $Instancia | Out-Null
+  $salida = & powershell -NoProfile -ExecutionPolicy Bypass -File $Wactl mcp $Instancia 2>&1 | Out-String
   if ($LASTEXITCODE -eq 0) { Ok "conectado con Claude"; $mcpOk = $true }
+  else { $mcpError = $salida.Trim() }
 } else {
   Info "no encontre Claude Code instalado"
 }
@@ -321,6 +323,14 @@ el WhatsApp, porque se abrieron antes de conectarlo.
 
 Despues pruebalo pidiendole algo como:
 'muestrame mis ultimos chats de WhatsApp'
+"@
+} elseif ($mcpError) {
+  Morir @"
+Tu WhatsApp quedo vinculado, pero no pude conectarlo con Claude.
+
+Detalle: $mcpError
+
+Mandale una foto de esta ventana a quien te paso el instalador.
 "@
 } else {
   Alerta "Casi listo" @"
