@@ -169,13 +169,15 @@ else
   echo "  Va a salir un código QR. En tu teléfono abre WhatsApp y ve a:"
   echo "     Ajustes → Dispositivos vinculados → Vincular un dispositivo"
   echo
+  echo "  Si el QR no te funciona, vincula con tu número (te da un código de 8 letras):"
+  echo "     $DESTINO/wactl qr $INSTANCIA 8095551234"
+  echo
   echo "  Escanea el código y espera a que termine de bajar tus mensajes"
   echo "  (unos minutos). Cuando el texto deje de moverse, presiona Ctrl+C."
   echo
   echo "  Después, para dejarlo funcionando:"
   echo
-  echo "     $DESTINO/wactl start $INSTANCIA"
-  echo "     $DESTINO/wactl autostart $INSTANCIA"
+  echo "     $DESTINO/wactl autostart $INSTANCIA      (también lo enciende)"
   echo "     $DESTINO/wactl mcp $INSTANCIA"
   echo
   echo "  Y reinicia Claude Code."

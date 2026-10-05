@@ -8,7 +8,8 @@
 # Uso:
 #   wactl list                    instancias y su estado
 #   wactl new <nombre>            crear una instancia nueva
-#   wactl qr <nombre>             vincular el teléfono (primer plano, muestra el QR)
+#   wactl qr <nombre> [teléfono]  vincular el teléfono (primer plano). Sin teléfono
+#                                 muestra el QR; con teléfono da un código de 8 letras
 #   wactl start|stop|restart <n>  controlar el bridge
 #   wactl status [nombre]         estado detallado
 #   wactl logs <nombre> [lineas]  ver el log
@@ -147,18 +148,27 @@ EOF
 
 cmd_qr() {
   local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
+  local tel; tel="$(printf '%s' "${2:-}" | tr -cd '0-9')"
   cargar "$n"
   if pid_real "$n" >/dev/null 2>&1; then
     morir "'$n' ya está corriendo. Párala primero: wactl stop $n"
   fi
+  # Números dominicanos de 10 dígitos: se les agrega el 1 del país.
+  [[ ${#tel} -eq 10 && "$tel" =~ ^(809|829|849) ]] && tel="1$tel"
   echo "Arrancando '$n' en primer plano."
-  echo "Escanea el QR desde: WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo"
+  if [[ -n "$tel" ]]; then
+    echo "Va a salir un código de 8 letras. En el teléfono: WhatsApp → Ajustes → Dispositivos"
+    echo "vinculados → Vincular un dispositivo → Vincular con el número de teléfono"
+  else
+    echo "Escanea el QR desde: WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo"
+  fi
   echo "Cuando termine de sincronizar, Ctrl+C y luego: wactl start $n"
   echo
   mkdir -p "$WHATSAPP_STORE_DIR"
   cd "$(dirname "$BRIDGE_BIN")" || morir "no encuentro el bridge"
   WHATSAPP_STORE_DIR="$WHATSAPP_STORE_DIR" \
   WHATSAPP_BRIDGE_PORT="$WHATSAPP_BRIDGE_PORT" \
+  WHATSAPP_PAIR_PHONE="$tel" \
     "$BRIDGE_BIN"
 }
 
@@ -176,6 +186,18 @@ cmd_start() {
   mkdir -p "$WHATSAPP_STORE_DIR"
   local log="$INSTANCES_DIR/$n/bridge.log"
   mkdir -p "$(dirname "$log")"
+  # Si la cuenta arranca sola, la enciende launchd: así hay un solo dueño del
+  # proceso. Si se arranca aparte con nohup, launchd abre otro con la misma sesión.
+  local plist="$LAUNCH_AGENTS/$PLIST_PREFIX.$n.plist"
+  if [[ -f "$plist" ]]; then
+    launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || \
+      launchctl kickstart "gui/$(id -u)/$PLIST_PREFIX.$n" 2>/dev/null
+    sleep 3
+    if pid_real "$n" >/dev/null 2>&1; then
+      verde "'$n' arrancada en el puerto $WHATSAPP_BRIDGE_PORT"; return 0
+    fi
+    rojo "'$n' no arrancó. Mira el log: wactl logs $n"; return 1
+  fi
   ( cd "$(dirname "$BRIDGE_BIN")" && \
     WHATSAPP_STORE_DIR="$WHATSAPP_STORE_DIR" \
     WHATSAPP_BRIDGE_PORT="$WHATSAPP_BRIDGE_PORT" \
@@ -191,6 +213,9 @@ cmd_start() {
 cmd_stop() {
   local n="${1:-}"; [[ -n "$n" ]] || morir "falta el nombre"
   cargar "$n"
+  # Con launchd y KeepAlive, matar el proceso no basta: launchd lo revive.
+  # Se descarga el servicio (vuelve a cargarse solo al iniciar sesión o con start).
+  launchctl bootout "gui/$(id -u)/$PLIST_PREFIX.$n" 2>/dev/null && sleep 1
   local p; p="$(pid_real "$n" 2>/dev/null)"
   if [[ -z "$p" ]]; then gris "'$n' no estaba corriendo"; return 0; fi
   kill "$p" 2>/dev/null

@@ -251,17 +251,50 @@ if ($yaVinculado) {
 } else {
   Paso "7. Vinculando tu telefono"
 
+  # Dos formas: escribir en el telefono un codigo de 8 letras (con el numero)
+  # o escanear un QR. La del numero no depende de la camara ni de abrir una
+  # imagen en la PC.
+  $forma = [System.Windows.Forms.MessageBox]::Show(@"
+Como quieres vincular tu WhatsApp?
+
+SI  = con tu numero de telefono. Te doy un codigo de 8 letras
+      y lo escribes en el telefono.
+
+NO  = escaneando un codigo QR con la camara del telefono.
+"@, "Vincular WhatsApp", 'YesNoCancel', 'Question')
+  if ($forma -eq 'Cancel') { Write-Host "Instalacion cancelada."; exit 0 }
+  $porNumero = ($forma -eq 'Yes')
+
+  $telefono = ""
+  if ($porNumero) {
+    Add-Type -AssemblyName Microsoft.VisualBasic | Out-Null
+    for ($intento = 0; $intento -lt 3 -and -not $telefono; $intento++) {
+      $escrito = [Microsoft.VisualBasic.Interaction]::InputBox(
+        "Escribe tu numero de WhatsApp.`n`nEjemplo: 809 555 1234`n`nSi no es de Republica Dominicana, ponlo con el codigo de pais.",
+        "Tu numero de WhatsApp", "")
+      if (-not $escrito) { Write-Host "Instalacion cancelada."; exit 0 }
+      $digitos = ($escrito -replace '\D', '')
+      # Numeros dominicanos de 10 digitos: se les agrega el 1 del pais.
+      if ($digitos.Length -eq 10 -and $digitos -match '^(809|829|849)') { $digitos = "1$digitos" }
+      if ($digitos.Length -ge 11 -and $digitos.Length -le 15) { $telefono = $digitos }
+      else { Alerta "Numero no valido" "No reconozco '$escrito' como numero de telefono. Intentalo otra vez." }
+    }
+    if (-not $telefono) { Morir "No se pudo leer el numero de telefono." }
+  }
+
   # Un intento anterior pudo dejar un puente de esta cuenta corriendo. Dos a la
   # vez se pelean el puerto y la sesion, y WhatsApp desconecta a uno.
   CorrerWactl stop $Instancia | Out-Null
 
-  Remove-Item $qrPath -ErrorAction SilentlyContinue
+  $codigoPath = Join-Path $store "codigo.txt"
+  $codigoErr  = Join-Path $store "codigo-error.txt"
+  Remove-Item $qrPath, $codigoPath, $codigoErr -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force -Path $store | Out-Null
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
 
   $env:WHATSAPP_STORE_DIR   = $store
   $env:WHATSAPP_BRIDGE_PORT = $puerto
-  $env:WHATSAPP_QR_OPEN     = "1"
+  if ($porNumero) { $env:WHATSAPP_PAIR_PHONE = $telefono } else { $env:WHATSAPP_QR_OPEN = "1" }
   # La marca --instancia permite que wactl y el arranque automatico reconozcan
   # este proceso como el puente de la cuenta y no abran otro.
   $proc = Start-Process -FilePath $BridgeBin -ArgumentList "--instancia=$Instancia" `
@@ -270,26 +303,68 @@ if ($yaVinculado) {
             -WindowStyle Hidden -PassThru
   $null = $proc.Handle
   $proc.Id | Set-Content (Join-Path $InstancesDir "$Instancia\bridge.pid")
-  Remove-Item Env:\WHATSAPP_QR_OPEN -ErrorAction SilentlyContinue
+  Remove-Item Env:\WHATSAPP_QR_OPEN, Env:\WHATSAPP_PAIR_PHONE -ErrorAction SilentlyContinue
 
-  Info "generando el codigo QR..."
-  for ($i = 0; $i -lt 40; $i++) {
-    if ((Test-Path $qrPath) -or $proc.HasExited) { break }
-    Start-Sleep -Seconds 1
-  }
-  if (-not (Test-Path $qrPath)) {
-    $detalle = UltimasLineas $log
-    CorrerWactl stop $Instancia | Out-Null
-    Morir @"
+  if ($porNumero) {
+    Info "pidiendo el codigo a WhatsApp..."
+    for ($i = 0; $i -lt 40; $i++) {
+      if ((Test-Path $codigoPath) -or (Test-Path $codigoErr) -or $proc.HasExited) { break }
+      Start-Sleep -Seconds 1
+    }
+    if (-not (Test-Path $codigoPath)) {
+      $detalle = if (Test-Path $codigoErr) { Get-Content $codigoErr -Raw } else { UltimasLineas $log }
+      CorrerWactl stop $Instancia | Out-Null
+      Morir @"
+WhatsApp no dio el codigo para el numero +$telefono.
+
+Revisa que el numero este bien y que tengas internet. Tambien puedes correr
+el instalador otra vez y elegir el codigo QR.
+
+Detalle:
+$detalle
+"@
+    }
+    $codigo = (Get-Content $codigoPath -Raw).Trim()
+    Write-Host ""
+    Write-Host "      CODIGO:  $codigo" -ForegroundColor Yellow
+    Write-Host ""
+    Aviso "Escribe este codigo en tu telefono" @"
+Tu codigo es:
+
+          $codigo
+
+En tu telefono (+$telefono):
+
+1. Abre WhatsApp
+2. Ve a Ajustes -> Dispositivos vinculados
+3. Toca 'Vincular un dispositivo'
+4. Abajo, toca 'Vincular con el numero de telefono'
+5. Escribe el codigo
+
+Puede que te llegue una notificacion de WhatsApp: si la tocas, te lleva
+directo a donde se escribe el codigo.
+
+El codigo vence en unos 2 minutos. Cuando termines, dale a Aceptar aqui.
+"@
+  } else {
+    Info "generando el codigo QR..."
+    for ($i = 0; $i -lt 40; $i++) {
+      if ((Test-Path $qrPath) -or $proc.HasExited) { break }
+      Start-Sleep -Seconds 1
+    }
+    if (-not (Test-Path $qrPath)) {
+      $detalle = UltimasLineas $log
+      CorrerWactl stop $Instancia | Out-Null
+      Morir @"
 No se pudo generar el codigo QR. Revisa que tengas internet e intentalo de nuevo.
 
 Detalle:
 $detalle
 "@
-  }
-  Ok "codigo QR en pantalla"
+    }
+    Ok "codigo QR en pantalla"
 
-  Aviso "Escanea el codigo" @"
+    Aviso "Escanea el codigo" @"
 Se abrio un codigo QR en tu pantalla.
 
 Si Windows te pregunta con que app abrirlo, elige *Fotos*.
@@ -305,20 +380,23 @@ En tu telefono:
 
 Cuando termines, dale a Aceptar aqui.
 "@
+  }
 
   Info "esperando la conexion..."
   $conectado = EsperarConexion 150 $proc
   if (-not $conectado -and -not $proc.HasExited) {
-    # El QR sigue vivo un rato: se ofrece reintentar sin generar uno nuevo.
-    # Pedir varios QR seguidos hace que WhatsApp bloquee el vinculo un rato
-    # ("intentalo mas tarde"), asi que conviene reusar el que ya esta en pantalla.
+    # El codigo sigue vivo un rato: se ofrece reintentar sin pedir uno nuevo.
+    # Pedir varios seguidos hace que WhatsApp bloquee el vinculo un rato
+    # ("intentalo mas tarde").
+    $cual = if ($porNumero) { "Escribe en el telefono el codigo $codigo" }
+            else { "El codigo QR sigue abierto en:`n$qrPath`nAbrelo y escanealo" }
     $r = [System.Windows.Forms.MessageBox]::Show(@"
 Todavia no se ha conectado.
 
-Si no te dio tiempo de escanear, el codigo sigue abierto en:
-$qrPath
+Si no te dio tiempo, todavia puedes hacerlo:
+$cual
 
-Abrelo, escanealo, y dale a Reintentar.
+y dale a Reintentar.
 
 (No cierres esta ventana: pedir codigos nuevos seguidos hace que WhatsApp
 bloquee el vinculo por unos 20 minutos.)
@@ -331,7 +409,7 @@ bloquee el vinculo por unos 20 minutos.)
   if (-not $conectado) {
     CorrerWactl stop $Instancia | Out-Null
     Morir @"
-No se completo la conexion.
+No se completo la conexion. El codigo ya vencio.
 
 Si WhatsApp te dijo 'intentalo mas tarde', espera unos 20 minutos antes de
 volver a intentarlo: bloquea el vinculo cuando se piden varios codigos seguidos.
@@ -341,7 +419,7 @@ Despues corre de nuevo el instalador.
   }
   $st = EstadoPuente $puerto
   Ok "conectado ($($st.phone))"
-  Remove-Item $qrPath -ErrorAction SilentlyContinue
+  Remove-Item $qrPath, $codigoPath, $codigoErr -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------- dejarlo listo

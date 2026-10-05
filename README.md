@@ -98,7 +98,9 @@ En el momento indicado te va a **abrir un código QR en la pantalla**. Ahí saca
 
 **WhatsApp → Ajustes → Dispositivos vinculados → Vincular un dispositivo**
 
-Escaneas, y el instalador se encarga del resto. Al terminar solo tienes que cerrar Claude Code y abrirlo de nuevo.
+Escaneas, y el instalador se encarga del resto.
+
+Si el QR no te funciona, el instalador también te deja **vincular con tu número de teléfono**: te da un código de 8 letras y lo escribes en el teléfono, en **Vincular un dispositivo → Vincular con el número de teléfono**. Al terminar solo tienes que cerrar Claude Code y abrirlo de nuevo.
 
 > **En Windows**, la primera vez puede pedirte cerrar la ventana y volver a hacer doble clic. Es normal: Windows necesita eso para reconocer los programas recién instalados.
 
@@ -125,7 +127,8 @@ Después de instalar puedes escribir `wactl` en la terminal (en Windows, `wactl.
 | `wactl status principal` | ver el detalle, incluida la conexión real con WhatsApp |
 | `wactl logs principal` | ver las últimas líneas del registro, si algo falla |
 | `wactl logs principal -f` | seguir el registro en vivo (Windows; `Ctrl+C` para salir) |
-| `wactl qr principal` | volver a vincular si se venció |
+| `wactl qr principal` | volver a vincular si se venció (con el QR) |
+| `wactl qr principal 8095551234` | volver a vincular con tu número (código de 8 letras) |
 
 En Mac, para que el comando corto funcione, abre una terminal nueva después de instalar.
 

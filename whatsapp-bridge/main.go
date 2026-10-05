@@ -102,6 +102,46 @@ func guardarQRImagen(codigo string) (string, error) {
 	return abs, nil
 }
 
+func soloDigitos(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// pedirCodigoVinculo pide a WhatsApp el codigo para vincular por numero de
+// telefono, lo imprime y lo deja en codigo.txt para que el instalador lo
+// muestre. Si falla, el motivo queda en codigo-error.txt.
+func pedirCodigoVinculo(client *whatsmeow.Client, phone string, logger waLog.Logger) {
+	_ = os.Remove(storePath("codigo-error.txt"))
+	nombre := "Chrome (Linux)"
+	switch runtime.GOOS {
+	case "windows":
+		nombre = "Chrome (Windows)"
+	case "darwin":
+		nombre = "Chrome (Mac OS)"
+	}
+	codigo, err := client.PairPhone(context.Background(), phone, true, whatsmeow.PairClientChrome, nombre)
+	if err != nil && nombre != "Chrome (Linux)" {
+		// WhatsApp solo acepta ciertos nombres de navegador y sistema.
+		logger.Warnf("WhatsApp no acepto %q (%v); reintentando como Chrome (Linux)", nombre, err)
+		codigo, err = client.PairPhone(context.Background(), phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
+	}
+	if err != nil {
+		logger.Errorf("No se pudo pedir el codigo de vinculacion para +%s: %v", phone, err)
+		_ = os.WriteFile(storePath("codigo-error.txt"), []byte(err.Error()), 0644)
+		return
+	}
+	fmt.Printf("\nCodigo para vincular +%s: %s\n", phone, codigo)
+	fmt.Println("En el telefono: WhatsApp -> Dispositivos vinculados -> Vincular un dispositivo -> Vincular con el numero de telefono")
+	if err := os.WriteFile(storePath("codigo.txt"), []byte(codigo), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "No se pudo guardar el codigo: %v\n", err)
+	}
+}
+
 // abrirArchivo lo abre con el visor por defecto del sistema.
 func abrirArchivo(ruta string) {
 	var cmd *exec.Cmd
@@ -1539,9 +1579,20 @@ func main() {
 			return
 		}
 
+		// Con WHATSAPP_PAIR_PHONE se vincula con un codigo de 8 caracteres que
+		// se escribe en el telefono, en vez de escanear el QR. WhatsApp exige
+		// esperar al primer QR antes de pedirlo; los demas QR se ignoran.
+		pairPhone := soloDigitos(os.Getenv("WHATSAPP_PAIR_PHONE"))
+		codigoPedido := false
+
 		// Print QR code for pairing with phone
 		for evt := range qrChan {
-			if evt.Event == "code" {
+			if evt.Event == "code" && pairPhone != "" {
+				if !codigoPedido {
+					codigoPedido = true
+					pedirCodigoVinculo(client, pairPhone, logger)
+				}
+			} else if evt.Event == "code" {
 				fmt.Println("\nScan this QR code with your WhatsApp app:")
 				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
 				// Ademas del QR de texto, se guarda como imagen: el instalador

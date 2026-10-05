@@ -5,7 +5,8 @@
 #
 #   wactl.ps1 list                     cuentas y su estado
 #   wactl.ps1 new <nombre>             crear una cuenta
-#   wactl.ps1 qr <nombre>              vincular el telefono (muestra el QR)
+#   wactl.ps1 qr <nombre> [telefono]   vincular el telefono: sin telefono muestra
+#                                      el QR; con telefono da un codigo de 8 letras
 #   wactl.ps1 start|stop|restart <n>   controlar el puente
 #   wactl.ps1 status <nombre>          detalle de una cuenta
 #   wactl.ps1 logs <nombre> [lineas]   ultimas lineas del registro
@@ -315,21 +316,30 @@ WHATSAPP_MCP_NAME=whatsapp-$n
   Write-Host "  wactl.ps1 qr $n"
 }
 
-function Cmd-Qr($n) {
+function Cmd-Qr($n, $tel) {
   if (-not $n) { Morir "falta el nombre" }
   $cfg = Cargar $n
   if ((PidsDe $n $cfg).Count) { Morir "'$n' ya esta corriendo. Parala primero: wactl.ps1 stop $n" }
+  $tel = ("$tel" -replace '\D', '')
+  # Numeros dominicanos de 10 digitos: se les agrega el 1 del pais.
+  if ($tel.Length -eq 10 -and $tel -match '^(809|829|849)') { $tel = "1$tel" }
 
   Write-Host "Arrancando '$n'."
-  Write-Host "Escanea el QR desde: WhatsApp -> Ajustes -> Dispositivos vinculados -> Vincular un dispositivo"
+  if ($tel) {
+    Write-Host "Va a salir un codigo de 8 letras. En el telefono: WhatsApp -> Ajustes -> Dispositivos"
+    Write-Host "vinculados -> Vincular un dispositivo -> Vincular con el numero de telefono"
+  } else {
+    Write-Host "Escanea el QR desde: WhatsApp -> Ajustes -> Dispositivos vinculados -> Vincular un dispositivo"
+  }
   Write-Host "Cuando termine de sincronizar, Ctrl+C y luego: wactl.ps1 start $n"
   Write-Host ""
 
   New-Item -ItemType Directory -Force -Path $cfg.WHATSAPP_STORE_DIR | Out-Null
   $env:WHATSAPP_STORE_DIR   = $cfg.WHATSAPP_STORE_DIR
   $env:WHATSAPP_BRIDGE_PORT = $cfg.WHATSAPP_BRIDGE_PORT
+  $env:WHATSAPP_PAIR_PHONE  = $tel
   Push-Location (Split-Path -Parent $BridgeBin)
-  try { & $BridgeBin "--instancia=$n" } finally { Pop-Location }
+  try { & $BridgeBin "--instancia=$n" } finally { Pop-Location; Remove-Item Env:\WHATSAPP_PAIR_PHONE -ErrorAction SilentlyContinue }
 }
 
 function Cmd-Start($n) {
@@ -567,7 +577,7 @@ function Cmd-Remove($n) {
 switch ($Comando.ToLower()) {
   "list"      { Cmd-List }
   "new"       { Cmd-New $Nombre }
-  "qr"        { Cmd-Qr $Nombre }
+  "qr"        { Cmd-Qr $Nombre $Extra }
   "start"     { Cmd-Start $Nombre }
   "stop"      { Cmd-Stop $Nombre }
   "restart"   { Cmd-Stop $Nombre; Start-Sleep -Seconds 1; Cmd-Start $Nombre }
@@ -576,6 +586,6 @@ switch ($Comando.ToLower()) {
   "mcp"       { Cmd-Mcp $Nombre }
   "autostart" { Cmd-Autostart $Nombre }
   "remove"    { Cmd-Remove $Nombre }
-  default     { Get-Content $MyInvocation.MyCommand.Path | Select-Object -First 16 |
+  default     { Get-Content $MyInvocation.MyCommand.Path | Select-Object -First 17 |
                 ForEach-Object { $_ -replace '^#\s?','' } }
 }
