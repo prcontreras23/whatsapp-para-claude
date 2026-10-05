@@ -301,8 +301,15 @@ Ok "arrancara solo al encender la computadora"
 $mcpOk = $false
 $mcpError = ""
 if (Tiene claude) {
-  $salida = & powershell -NoProfile -ExecutionPolicy Bypass -File $Wactl mcp $Instancia 2>&1 | Out-String
-  if ($LASTEXITCODE -eq 0) { Ok "conectado con Claude"; $mcpOk = $true }
+  # Con "Stop", lo que wactl escriba en stderr tumbaria el instalador antes de
+  # poder mostrar el motivo. Se baja a "Continue" solo para esta llamada.
+  $antes = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $salida = & powershell -NoProfile -ExecutionPolicy Bypass -File $Wactl mcp $Instancia 2>&1 |
+              ForEach-Object { "$_" } | Out-String
+  $codigo = $LASTEXITCODE
+  $ErrorActionPreference = $antes
+  if ($codigo -eq 0) { Ok "conectado con Claude"; $mcpOk = $true }
   else { $mcpError = $salida.Trim() }
 } else {
   Info "no encontre Claude Code instalado"

@@ -202,8 +202,10 @@ function Tiene-ClaudeDesktop {
   )
   foreach ($r in $rutas) { if (Test-Path $r) { return $true } }
   if (Tiene winget) {
-    $l = winget list --id Anthropic.Claude -e 2>$null | Out-String
-    if ($l -match "Anthropic\.Claude") { return $true }
+    try {
+      $l = winget list --id Anthropic.Claude -e 2>$null | Out-String
+      if ($l -match "Anthropic\.Claude") { return $true }
+    } catch {}
   }
   return $false
 }

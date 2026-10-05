@@ -243,6 +243,12 @@ function Cmd-Mcp($n) {
   if (-not $uv) { Morir "no encuentro uv" }
   if (-not (Get-Command claude -ErrorAction SilentlyContinue)) { Morir "no encuentro Claude Code" }
 
+  # En Windows PowerShell 5.1, con "Stop", cualquier linea que claude escriba
+  # en stderr (por ejemplo "No MCP server named ...", al quitar un registro que
+  # no existe) se vuelve un error que tumba el script. Aqui los fallos se
+  # revisan con $LASTEXITCODE.
+  $ErrorActionPreference = "Continue"
+
   # Windows PowerShell 5.1 se traga el "--" al llamar programas externos, asi
   # que "claude mcp add ... -- uv --directory ..." llegaba roto y el registro
   # fallaba sin avisar. Se arma un .cmd con todo dentro y se registra ese, sin
@@ -310,6 +316,7 @@ function Cmd-Remove($n) {
   $conf = Read-Host "Escribe el nombre de la cuenta para confirmar"
   if ($conf -ne $n) { Info "cancelado"; return }
   Cmd-Stop $n
+  $ErrorActionPreference = "Continue"
   Unregister-ScheduledTask -TaskName "$TaskPrefix-$n" -Confirm:$false -ErrorAction SilentlyContinue
   & claude mcp remove $cfg.WHATSAPP_MCP_NAME --scope user 2>$null
   Remove-Item -Recurse -Force (Join-Path $InstancesDir $n) -ErrorAction SilentlyContinue
