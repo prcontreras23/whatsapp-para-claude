@@ -1,4 +1,4 @@
-﻿# Arranque de una linea para Windows:
+# Arranque de una linea para Windows:
 #
 #   irm https://raw.githubusercontent.com/prcontreras23/whatsapp-para-claude/main/instalar-windows.ps1 | iex
 #
