@@ -48,7 +48,7 @@ Paso "2. Instalando lo que falta"
 if (-not (Tiene go)) {
   Info "instalando Go (puede tardar unos minutos)..."
   if (Instalar-Go) { Ok "Go" } else {
-    Morir "No pude instalar Go. Descargalo de https://go.dev/dl/ y vuelve a correr este instalador."
+    Morir "No pude instalar Go ($script:ErrorGo). Descargalo de https://go.dev/dl/ y vuelve a correr este instalador."
   }
 }
 

@@ -46,28 +46,52 @@ function Instalar-Go {
 
   if (Probar-Winget "GoLang.Go") { Ruta-Extendida; if (Tiene go) { return $true } }
 
-  # ZIP oficial de go.dev, extraido en la carpeta del usuario.
+  # ZIP oficial de Go, extraido en la carpeta del usuario.
+  # En Windows PowerShell 5.1: sin TLS 1.2 forzado la descarga puede fallar, y
+  # con la barra de progreso visible Invoke-WebRequest baja un ZIP de 80 MB a
+  # paso de tortuga. Si aun asi falla, se intenta con curl.exe (viene en
+  # Windows 10 y 11).
+  $script:ErrorGo = ""
+  $progresoAntes = $ProgressPreference
+  $ProgressPreference = 'SilentlyContinue'
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
   $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
   try {
-    $lista = Invoke-RestMethod -Uri "https://go.dev/dl/?mode=json" -TimeoutSec 30
-    $archivo = $lista[0].files | Where-Object {
-      $_.os -eq "windows" -and $_.arch -eq $arch -and $_.kind -eq "archive"
-    } | Select-Object -First 1
-    if (-not $archivo) { return $false }
+    $version = $null
+    try {
+      $lista = Invoke-RestMethod -Uri "https://go.dev/dl/?mode=json" -TimeoutSec 30
+      $version = @($lista)[0].version
+    } catch {
+      $version = ((curl.exe -fsSL "https://go.dev/VERSION?m=text") -split "`n")[0].Trim()
+    }
+    if (-not $version) { throw "no pude averiguar la version actual de Go" }
 
-    $url = "https://go.dev/dl/$($archivo.filename)"
-    $zip = Join-Path $env:TEMP $archivo.filename
+    $nombre = "$version.windows-$arch.zip"
+    $url = "https://dl.google.com/go/$nombre"
+    $zip = Join-Path $env:TEMP $nombre
     $destino = Join-Path $env:USERPROFILE ".local"
 
     New-Item -ItemType Directory -Force -Path $destino | Out-Null
     if (Test-Path $script:LocalGo) { Remove-Item -Recurse -Force $script:LocalGo }
 
-    Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+    try {
+      Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+    } catch {
+      curl.exe -fL --retry 3 -o $zip $url
+      if ($LASTEXITCODE -ne 0) { throw "la descarga de $url fallo (curl $LASTEXITCODE)" }
+    }
+    if ((Get-Item $zip).Length -lt 10MB) {
+      throw "la descarga de $url llego incompleta ($((Get-Item $zip).Length) bytes)"
+    }
     Expand-Archive -Path $zip -DestinationPath $destino -Force
     Remove-Item $zip -ErrorAction SilentlyContinue
   } catch {
+    $script:ErrorGo = $_.Exception.Message
+    $ProgressPreference = $progresoAntes
     return $false
   }
+  $ProgressPreference = $progresoAntes
 
   Ruta-Extendida
   return (Tiene go)

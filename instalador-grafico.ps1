@@ -90,6 +90,7 @@ if (-not (Tiene go)) {
   if (Instalar-Go) { Ok "Go" } else {
     Morir @"
 No pude instalar Go automaticamente.
+Motivo: $script:ErrorGo
 
 Descargalo de https://go.dev/dl/ (la version para Windows), instalalo,
 y vuelve a hacer doble clic aqui.
