@@ -102,6 +102,26 @@ func guardarQRImagen(codigo string) (string, error) {
 	return abs, nil
 }
 
+// soloLocal rechaza lo que venga de un navegador. Aunque el puente solo
+// escuche en esta computadora, una pagina web abierta aqui podria mandarle un
+// POST a localhost:<puerto>/api/send. Los navegadores siempre ponen Origin en
+// esos pedidos (los clientes legitimos, el servidor MCP y curl, no), y el Host
+// tiene que ser localhost para cerrar el paso a un DNS rebinding.
+func soloLocal(next http.Handler, port int) http.Handler {
+	hosts := map[string]bool{
+		fmt.Sprintf("localhost:%d", port): true,
+		fmt.Sprintf("127.0.0.1:%d", port): true,
+		fmt.Sprintf("[::1]:%d", port):     true,
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") != "" || r.Header.Get("Sec-Fetch-Site") != "" || !hosts[strings.ToLower(r.Host)] {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func soloDigitos(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -1459,10 +1479,19 @@ func main() {
 	// cuenta corriendo, este sale aqui: conectarse con la misma sesion haria que
 	// WhatsApp desconecte al otro, y el que se queda con el puerto responderia
 	// "Not connected" a todo.
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", bridgePort))
+	//
+	// Solo se escucha en esta computadora (127.0.0.1 y ::1), nunca en la red:
+	// la API no pide contrasena y permite leer chats y enviar mensajes.
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", bridgePort))
 	if err != nil {
 		logger.Errorf("El puerto %d ya esta en uso, seguramente por otro puente de esta misma cuenta: %v", bridgePort, err)
 		os.Exit(3)
+	}
+	// "localhost" puede resolver primero a ::1 (Windows lo hace), asi que se
+	// escucha tambien ahi; si la computadora no tiene IPv6, se sigue sin el.
+	listener6, err6 := net.Listen("tcp", fmt.Sprintf("[::1]:%d", bridgePort))
+	if err6 != nil {
+		listener6 = nil
 	}
 
 	// Create database connection for storing session data
@@ -1554,11 +1583,15 @@ func main() {
 			"phone":     phone,
 		})
 	})
+	api := soloLocal(http.DefaultServeMux, bridgePort)
 	go func() {
-		if err := http.Serve(listener, nil); err != nil {
+		if err := http.Serve(listener, api); err != nil {
 			fmt.Printf("REST API server error: %v\n", err)
 		}
 	}()
+	if listener6 != nil {
+		go func() { _ = http.Serve(listener6, api) }()
+	}
 
 	// Create channel to track connection success
 	connected := make(chan bool, 1)

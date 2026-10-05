@@ -13,6 +13,7 @@ Esto le da a Claude acceso a **todo tu WhatsApp**: tus chats personales, tus gru
 Vale la pena que sepas cómo funciona:
 
 - **Tus mensajes se quedan en tu computadora.** Se guardan en un archivo tuyo, en tu equipo. No se suben a ningún servidor.
+- **Nadie más en tu red puede usarlo.** El programa que habla con WhatsApp abre un puerto (8080) que solo acepta conexiones de tu propia computadora (`127.0.0.1`), nunca de otros equipos de la red de la oficina o de la casa. Además rechaza cualquier pedido que venga de una página web abierta en tu navegador. Ojo: cualquier programa que ya corra en tu computadora con tu usuario sí puede usarlo, igual que puede leer tus archivos.
 - **Lo que sí sale** es lo que tú le pidas a Claude en cada conversación. Si le pides que te resuma un chat, ese chat va a Claude para poder resumirlo. Igual que cuando le pegas un texto.
 - **Puede enviar mensajes en tu nombre.** Esa es justamente la gracia, pero significa que conviene revisar lo que Claude escribe antes de que lo mande.
 - **Se desconecta cuando quieras**, desde tu propio teléfono: WhatsApp → Ajustes → Dispositivos vinculados → y lo quitas de la lista.
