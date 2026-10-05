@@ -107,6 +107,7 @@ Escaneas, y el instalador se encarga del resto. Al terminar solo tienes que cerr
 ### Cosas que conviene saber
 
 - WhatsApp permite **4 dispositivos vinculados** a la vez. Si ya llegaste al tope, quita alguno primero.
+- Esto es **un dispositivo vinculado aparte** de WhatsApp para Windows o para Mac. Si usas esa app en la misma computadora, en tu teléfono vas a ver los dos, y los dos cuentan para el tope.
 - La conexión **se vence a los ~20 días** sin usarse. Si pasa, repites el paso del QR y ya.
 - El teléfono **no necesita quedarse conectado**, pero sí debe encender de vez en cuando.
 
@@ -121,8 +122,9 @@ Después de instalar puedes escribir `wactl` en la terminal (en Windows, `wactl.
 | `wactl list` | ver tus cuentas y si están funcionando |
 | `wactl start principal` | encender |
 | `wactl stop principal` | apagar |
-| `wactl status principal` | ver el detalle |
-| `wactl logs principal` | ver qué pasó, si algo falla |
+| `wactl status principal` | ver el detalle, incluida la conexión real con WhatsApp |
+| `wactl logs principal` | ver las últimas líneas del registro, si algo falla |
+| `wactl logs principal -f` | seguir el registro en vivo (Windows; `Ctrl+C` para salir) |
 | `wactl qr principal` | volver a vincular si se venció |
 
 En Mac, para que el comando corto funcione, abre una terminal nueva después de instalar.
@@ -148,7 +150,10 @@ Cada cuenta queda por su lado: su propio historial, su propia conexión. En Clau
 ## Si algo no funciona
 
 **«No aparecen las herramientas en Claude»**
-Revisa que esté encendido con `wactl list`. Si dice `activo`, reinicia Claude Code.
+Revisa que esté encendido con `wactl list`. Si dice `activo` o `conectado`, reinicia Claude Code y abre una conversación nueva.
+
+**«Not connected to WhatsApp» al enviar (Windows)**
+Corre `wactl.ps1 status principal`. Si dice que hay **dos puentes a la vez** o que el puente responde pero no está conectado, corre `wactl.ps1 restart principal`: cierra todos y deja uno solo. Si dice **sin sesión**, repite el paso del QR.
 
 **«Dice que no arrancó»**
 Corre `wactl logs principal` y mira las últimas líneas. Casi siempre es que se venció la conexión — repite el paso del QR.

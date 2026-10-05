@@ -35,6 +35,18 @@ function Morir($m) {
 }
 function Tiene($cmd) { $null -ne (Get-Command $cmd -ErrorAction SilentlyContinue) }
 
+# Corre un comando de wactl y devuelve su codigo y lo que dijo. Con "Stop", lo
+# que wactl escriba en stderr tumbaria el instalador antes de mostrar el motivo.
+function CorrerWactl {
+  $antes = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $salida = & powershell -NoProfile -ExecutionPolicy Bypass -File $Wactl @args 2>&1 |
+              ForEach-Object { "$_" } | Out-String
+  $codigo = $LASTEXITCODE
+  $ErrorActionPreference = $antes
+  return @{ Codigo = $codigo; Salida = $salida.Trim() }
+}
+
 Clear-Host
 Write-Host ""
 Write-Host "   WhatsApp para Claude"
@@ -55,6 +67,8 @@ Antes de seguir, es importante que sepas:
 - Tus mensajes se quedan en esta computadora. No se suben a ningun servidor.
 - Claude va a poder enviar mensajes en tu nombre.
 - Puedes desconectarlo cuando quieras, desde tu telefono.
+- Ocupa uno de los 4 "dispositivos vinculados" de tu WhatsApp. Es un
+  dispositivo aparte de WhatsApp para Windows: si usas esa app, son dos.
 
 La instalacion toma unos 15 minutos, casi todos de espera.
 Vas a necesitar tu telefono a mano.
@@ -122,6 +136,25 @@ Persistir-Ruta
 
 # ---------------------------------------------------------------- copiar y compilar
 
+# Un puente que ya este corriendo (de una instalacion anterior) bloquea
+# whatsapp-bridge.exe y la compilacion falla. Se apagan antes, con sus
+# supervisores, y al final se vuelven a encender.
+$cuentasAntes = @()
+$supervisores = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -and $_.CommandLine.Contains($InstancesDir) -and $_.CommandLine -match 'arrancar\.ps1' })
+$puentes = @(Get-CimInstance Win32_Process -Filter "Name='whatsapp-bridge.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($Destino, [StringComparison]::OrdinalIgnoreCase) })
+if ($supervisores.Count -or $puentes.Count) {
+  Paso "Apagando la version anterior"
+  foreach ($p in $puentes) {
+    if ($p.CommandLine -match '--instancia=([a-z0-9-]+)') { $cuentasAntes += $Matches[1] }
+  }
+  foreach ($p in $supervisores) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+  foreach ($p in $puentes) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+  foreach ($p in $puentes) { Wait-Process -Id $p.ProcessId -Timeout 10 -ErrorAction SilentlyContinue }
+  Ok "apagada ($($puentes.Count) puente(s))"
+}
+
 Paso "3. Copiando archivos"
 New-Item -ItemType Directory -Force -Path $Destino | Out-Null
 if ($RepoDir -ne $Destino) {
@@ -176,48 +209,83 @@ Ok "cuenta '$Instancia' lista (puerto $($cfg.WHATSAPP_BRIDGE_PORT))"
 # ---------------------------------------------------------------- vincular
 
 $store   = $cfg.WHATSAPP_STORE_DIR
+$puerto  = $cfg.WHATSAPP_BRIDGE_PORT
 $qrPath  = Join-Path $store "qr.png"
-$sesion  = Join-Path $store "whatsapp.db"
+$log     = Join-Path $InstancesDir "$Instancia\bridge.log"
 
-# Que el archivo exista no basta: un intento anterior que no llego a escanearse
-# deja un whatsapp.db vacio, y darlo por bueno hace que no se arranque el puente
-# ni se muestre el QR. Se comprueba que dentro haya un numero vinculado de verdad.
-$yaVinculado = $false
-if (Test-Path $sesion) {
-  $num = NumeroDe $store
-  if ($num -and $num -ne "sin vincular") { $yaVinculado = $true }
+# Que exista whatsapp.db no basta: un intento anterior que no llego a escanearse
+# deja uno vacio. Se le pregunta al puente si hay un numero vinculado de verdad.
+$numero = NumeroDe $store $BridgeBin
+$yaVinculado = ($numero -ne "sin vincular")
+
+# Espera a que el puente diga que esta conectado a WhatsApp (no basta con que
+# el puerto conteste). Se pide dos veces seguidas, porque justo despues de
+# escanear WhatsApp corta la conexion una vez y el puente se reconecta.
+function EsperarConexion($segundos, $proceso) {
+  $seguidas = 0
+  for ($i = 0; $i -lt $segundos; $i += 2) {
+    if ($proceso -and $proceso.HasExited) { return $false }
+    $st = EstadoPuente $puerto
+    if ($st -and $st.connected -and $st.logged_in) { $seguidas++ } else { $seguidas = 0 }
+    if ($seguidas -ge 2) { return $true }
+    Start-Sleep -Seconds 2
+  }
+  return $false
+}
+
+function UltimasLineas($ruta) {
+  if (-not (Test-Path $ruta)) { return "" }
+  try {
+    $fs = [System.IO.File]::Open($ruta, 'Open', 'Read', 'ReadWrite')
+    try {
+      $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+      $lineas = $sr.ReadToEnd() -split "`r?`n" | Where-Object { $_ -and $_ -notmatch '[▀-▟]' }
+    } finally { $fs.Close() }
+    return (@($lineas) | Select-Object -Last 4) -join "`n"
+  } catch { return "" }
 }
 
 if ($yaVinculado) {
-  Paso "7. Tu WhatsApp ya estaba vinculado"
+  Paso "7. Tu WhatsApp ya estaba vinculado ($numero)"
   Ok "no hace falta escanear otra vez"
-  # El arranque automatico solo entra al reiniciar Windows, asi que hay que
-  # levantarlo ahora o el puente se queda apagado y Claude no ve nada.
-  Info "arrancando el puente..."
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $Wactl start $Instancia | Out-Null
 } else {
   Paso "7. Vinculando tu telefono"
+
+  # Un intento anterior pudo dejar un puente de esta cuenta corriendo. Dos a la
+  # vez se pelean el puerto y la sesion, y WhatsApp desconecta a uno.
+  CorrerWactl stop $Instancia | Out-Null
+
   Remove-Item $qrPath -ErrorAction SilentlyContinue
   New-Item -ItemType Directory -Force -Path $store | Out-Null
-  $log = Join-Path $InstancesDir "$Instancia\bridge.log"
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
 
   $env:WHATSAPP_STORE_DIR   = $store
-  $env:WHATSAPP_BRIDGE_PORT = $cfg.WHATSAPP_BRIDGE_PORT
+  $env:WHATSAPP_BRIDGE_PORT = $puerto
   $env:WHATSAPP_QR_OPEN     = "1"
-  $proc = Start-Process -FilePath $BridgeBin `
+  # La marca --instancia permite que wactl y el arranque automatico reconozcan
+  # este proceso como el puente de la cuenta y no abran otro.
+  $proc = Start-Process -FilePath $BridgeBin -ArgumentList "--instancia=$Instancia" `
             -WorkingDirectory (Split-Path -Parent $BridgeBin) `
             -RedirectStandardOutput $log -RedirectStandardError "$log.err" `
             -WindowStyle Hidden -PassThru
+  $null = $proc.Handle
   $proc.Id | Set-Content (Join-Path $InstancesDir "$Instancia\bridge.pid")
+  Remove-Item Env:\WHATSAPP_QR_OPEN -ErrorAction SilentlyContinue
 
   Info "generando el codigo QR..."
   for ($i = 0; $i -lt 40; $i++) {
-    if (Test-Path $qrPath) { break }
+    if ((Test-Path $qrPath) -or $proc.HasExited) { break }
     Start-Sleep -Seconds 1
   }
   if (-not (Test-Path $qrPath)) {
-    Morir "No se pudo generar el codigo QR. Revisa que tengas internet e intentalo de nuevo."
+    $detalle = UltimasLineas $log
+    CorrerWactl stop $Instancia | Out-Null
+    Morir @"
+No se pudo generar el codigo QR. Revisa que tengas internet e intentalo de nuevo.
+
+Detalle:
+$detalle
+"@
   }
   Ok "codigo QR en pantalla"
 
@@ -238,18 +306,9 @@ En tu telefono:
 Cuando termines, dale a Aceptar aqui.
 "@
 
-  Info "esperando la conexion y bajando tus mensajes..."
-  $conectado = $false
-  for ($i = 0; $i -lt 90; $i++) {
-    try {
-      Invoke-WebRequest -Uri "http://localhost:$($cfg.WHATSAPP_BRIDGE_PORT)/api/" -TimeoutSec 2 -UseBasicParsing | Out-Null
-      $conectado = $true; break
-    } catch {
-      if ($_.Exception.Response) { $conectado = $true; break }
-    }
-    Start-Sleep -Seconds 2
-  }
-  if (-not $conectado) {
+  Info "esperando la conexion..."
+  $conectado = EsperarConexion 150 $proc
+  if (-not $conectado -and -not $proc.HasExited) {
     # El QR sigue vivo un rato: se ofrece reintentar sin generar uno nuevo.
     # Pedir varios QR seguidos hace que WhatsApp bloquee el vinculo un rato
     # ("intentalo mas tarde"), asi que conviene reusar el que ya esta en pantalla.
@@ -264,21 +323,13 @@ Abrelo, escanealo, y dale a Reintentar.
 (No cierres esta ventana: pedir codigos nuevos seguidos hace que WhatsApp
 bloquee el vinculo por unos 20 minutos.)
 "@, "Reintentar?", 'RetryCancel', 'Warning')
-
     if ($r -eq 'Retry') {
       Info "esperando otra vez..."
-      for ($i = 0; $i -lt 90; $i++) {
-        try {
-          Invoke-WebRequest -Uri "http://localhost:$($cfg.WHATSAPP_BRIDGE_PORT)/api/" -TimeoutSec 2 -UseBasicParsing | Out-Null
-          $conectado = $true; break
-        } catch {
-          if ($_.Exception.Response) { $conectado = $true; break }
-        }
-        Start-Sleep -Seconds 2
-      }
+      $conectado = EsperarConexion 150 $proc
     }
   }
   if (-not $conectado) {
+    CorrerWactl stop $Instancia | Out-Null
     Morir @"
 No se completo la conexion.
 
@@ -288,29 +339,46 @@ volver a intentarlo: bloquea el vinculo cuando se piden varios codigos seguidos.
 Despues corre de nuevo el instalador.
 "@
   }
-  Ok "conectado"
+  $st = EstadoPuente $puerto
+  Ok "conectado ($($st.phone))"
   Remove-Item $qrPath -ErrorAction SilentlyContinue
 }
 
 # ---------------------------------------------------------------- dejarlo listo
 
 Paso "8. Dejando todo funcionando"
-& powershell -NoProfile -ExecutionPolicy Bypass -File $Wactl autostart $Instancia | Out-Null
-Ok "arrancara solo al encender la computadora"
+$problemas = @()
+
+$r = CorrerWactl autostart $Instancia
+if ($r.Codigo -eq 0) { Ok "arrancara solo al encender la computadora" }
+else {
+  Write-Host "  X  no pude dejarlo arrancando solo al encender" -ForegroundColor Red
+  $problemas += "No arranca solo al encender: $($r.Salida)"
+}
+
+# wactl start deja un solo puente con su supervisor: si ya esta el del paso 7,
+# lo adopta en vez de abrir otro. Y no dice que esta listo hasta que el puente
+# confirma que esta conectado a WhatsApp.
+$r = CorrerWactl start $Instancia
+if ($r.Codigo -eq 0) { Ok "WhatsApp conectado y funcionando" }
+else {
+  Write-Host "  X  el puente no quedo conectado" -ForegroundColor Red
+  $problemas += "El puente no quedo conectado: $($r.Salida)"
+}
+
+# Las otras cuentas que estaban encendidas antes de actualizar.
+foreach ($otra in ($cuentasAntes | Where-Object { $_ -ne $Instancia } | Sort-Object -Unique)) {
+  $r = CorrerWactl start $otra
+  if ($r.Codigo -eq 0) { Ok "cuenta '$otra' encendida otra vez" }
+  else { $problemas += "La cuenta '$otra' no volvio a encender: $($r.Salida)" }
+}
 
 $mcpOk = $false
 $mcpError = ""
 if (Tiene claude) {
-  # Con "Stop", lo que wactl escriba en stderr tumbaria el instalador antes de
-  # poder mostrar el motivo. Se baja a "Continue" solo para esta llamada.
-  $antes = $ErrorActionPreference
-  $ErrorActionPreference = "Continue"
-  $salida = & powershell -NoProfile -ExecutionPolicy Bypass -File $Wactl mcp $Instancia 2>&1 |
-              ForEach-Object { "$_" } | Out-String
-  $codigo = $LASTEXITCODE
-  $ErrorActionPreference = $antes
-  if ($codigo -eq 0) { Ok "conectado con Claude"; $mcpOk = $true }
-  else { $mcpError = $salida.Trim() }
+  $r = CorrerWactl mcp $Instancia
+  if ($r.Codigo -eq 0) { Ok "conectado con Claude"; $mcpOk = $true }
+  else { $mcpError = $r.Salida }
 } else {
   Info "no encontre Claude Code instalado"
 }
@@ -318,9 +386,24 @@ if (Tiene claude) {
 Write-Host ""
 Bold "=== Listo ==="
 Write-Host ""
+if ($mcpOk) {
+  Write-Host "  Abre una conversacion NUEVA en Claude Code: las que ya estaban abiertas"
+  Write-Host "  no ven el WhatsApp, porque se abrieron antes de conectarlo."
+  Write-Host ""
+}
+Write-Host "  Para revisar como esta, en PowerShell:"
+Write-Host "     powershell -ExecutionPolicy Bypass -File `"$Wactl`" status $Instancia"
+Write-Host ""
+
+$extra = ""
+if ($problemas.Count) {
+  $extra = "`n`nOjo, hubo algo que no quedo bien:`n- " + ($problemas -join "`n- ") +
+           "`n`nMandale una foto de esta ventana a quien te paso el instalador."
+}
 
 if ($mcpOk) {
-  Aviso "Listo!" @"
+  $titulo = if ($problemas.Count) { "Casi listo" } else { "Listo!" }
+  Aviso $titulo @"
 Tu WhatsApp ya esta conectado con Claude.
 
 Ultimo paso: cierra Claude Code y vuelve a abrirlo.
@@ -328,22 +411,25 @@ Ultimo paso: cierra Claude Code y vuelve a abrirlo.
 Importante: empieza una conversacion NUEVA. Las que ya tenias abiertas no ven
 el WhatsApp, porque se abrieron antes de conectarlo.
 
+En tu telefono, en Dispositivos vinculados, esto aparece como un dispositivo
+aparte de WhatsApp para Windows.
+
 Despues pruebalo pidiendole algo como:
-'muestrame mis ultimos chats de WhatsApp'
+'muestrame mis ultimos chats de WhatsApp'$extra
 "@
 } elseif ($mcpError) {
   Morir @"
 Tu WhatsApp quedo vinculado, pero no pude conectarlo con Claude.
 
-Detalle: $mcpError
+Detalle: $mcpError$extra
 
 Mandale una foto de esta ventana a quien te paso el instalador.
 "@
 } else {
   Alerta "Casi listo" @"
-Tu WhatsApp quedo conectado y funcionando.
+Tu WhatsApp quedo vinculado.
 
-Pero no encontre Claude Code en esta computadora. Instalalo y despues vuelve a hacer doble clic en este instalador para terminar de conectarlo.
+Pero no encontre Claude Code en esta computadora. Instalalo y despues vuelve a hacer doble clic en este instalador para terminar de conectarlo.$extra
 "@
 }
 

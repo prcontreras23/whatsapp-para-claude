@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -1368,21 +1369,45 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		})
 	})
 
-	// Start the server
-	serverAddr := fmt.Sprintf(":%d", port)
-	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
+	// El puerto ya lo abrio main() al arrancar; aqui solo se agregan las rutas.
+	fmt.Printf("REST API lista en :%d\n", port)
+}
 
-	// Run server in a goroutine so it doesn't block
-	go func() {
-		if err := http.ListenAndServe(serverAddr, nil); err != nil {
-			fmt.Printf("REST API server error: %v\n", err)
-		}
-	}()
+// imprimirNumero escribe el telefono vinculado en la carpeta de datos y nada
+// mas, sin conectarse a WhatsApp. Los instaladores lo usan para saber si hay
+// una sesion real: leer el archivo a mano no sirve, porque recien vinculada la
+// sesion vive en whatsapp.db-wal y no en whatsapp.db.
+func imprimirNumero() {
+	if _, err := os.Stat(storePath("whatsapp.db")); err != nil {
+		return
+	}
+	container, err := sqlstore.New(context.Background(), "sqlite", "file:"+storePath("whatsapp.db")+sqlitePragmas, waLog.Noop)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer container.Close()
+	device, err := container.GetFirstDevice(context.Background())
+	if err == nil && device != nil && device.ID != nil {
+		fmt.Println("+" + device.ID.User)
+	}
 }
 
 func main() {
-	// Set up logger
-	logger := waLog.Stdout("Client", "INFO", true)
+	for _, a := range os.Args[1:] {
+		if a == "--numero" {
+			imprimirNumero()
+			return
+		}
+	}
+
+	// Set up logger. Sin colores cuando la salida va a un archivo: los codigos
+	// ANSI salen como basura al leer bridge.log.
+	colores := false
+	if fi, err := os.Stdout.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		colores = true
+	}
+	logger := waLog.Stdout("Client", "INFO", colores)
 	logger.Infof("Starting WhatsApp client...")
 	if abs, err := filepath.Abs(storeDir); err == nil {
 		logger.Infof("Instancia: store=%s puerto=%d", abs, bridgePort)
@@ -1390,8 +1415,18 @@ func main() {
 		logger.Infof("Instancia: store=%s puerto=%d", storeDir, bridgePort)
 	}
 
+	// El puerto se toma antes de tocar la sesion. Si ya hay otro puente de esta
+	// cuenta corriendo, este sale aqui: conectarse con la misma sesion haria que
+	// WhatsApp desconecte al otro, y el que se queda con el puerto responderia
+	// "Not connected" a todo.
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", bridgePort))
+	if err != nil {
+		logger.Errorf("El puerto %d ya esta en uso, seguramente por otro puente de esta misma cuenta: %v", bridgePort, err)
+		os.Exit(3)
+	}
+
 	// Create database connection for storing session data
-	dbLog := waLog.Stdout("Database", "INFO", true)
+	dbLog := waLog.Stdout("Database", "INFO", colores)
 
 	// Create directory for database if it doesn't exist
 	if err := os.MkdirAll(storeDir, 0755); err != nil {
@@ -1458,14 +1493,44 @@ func main() {
 
 		case *events.LoggedOut:
 			logger.Warnf("Device logged out, please scan QR code to log in again")
+
+		case *events.StreamReplaced:
+			logger.Errorf("Otra copia del puente se conecto con esta misma sesion y WhatsApp desconecto esta. Deja una sola corriendo.")
 		}
 	})
+
+	// /api/status responde desde el arranque, antes de conectar, para que los
+	// instaladores y wactl sepan si hay conexion real y no solo si el puerto
+	// contesta.
+	http.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) {
+		phone := ""
+		if id := client.Store.ID; id != nil {
+			phone = "+" + id.User
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"connected": client.IsConnected(),
+			"logged_in": client.IsLoggedIn(),
+			"phone":     phone,
+		})
+	})
+	go func() {
+		if err := http.Serve(listener, nil); err != nil {
+			fmt.Printf("REST API server error: %v\n", err)
+		}
+	}()
 
 	// Create channel to track connection success
 	connected := make(chan bool, 1)
 
 	// Connect to WhatsApp
 	if client.Store.ID == nil {
+		// Con WHATSAPP_NO_QR=1 (el arranque automatico de Windows) no se pide
+		// QR: pedir codigos en bucle hace que WhatsApp bloquee el vinculo.
+		if os.Getenv("WHATSAPP_NO_QR") == "1" {
+			logger.Errorf("Esta cuenta no esta vinculada. Vinculala con: wactl qr <cuenta>")
+			os.Exit(2)
+		}
 		// No ID stored, this is a new client, need to pair with phone
 		qrChan, _ := client.GetQRChannel(context.Background())
 		err = client.Connect()

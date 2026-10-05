@@ -174,21 +174,36 @@ function Instalar-Claude {
 
 # Lee el numero vinculado de la sesion. Sirve para distinguir una sesion real de
 # un whatsapp.db vacio que dejo un intento anterior sin escanear.
-function NumeroDe($store) {
-  $db = Join-Path $store "whatsapp.db"
-  if (-not (Test-Path $db)) { return "sin vincular" }
+#
+# Se le pregunta al propio puente (whatsapp-bridge.exe --numero) en vez de
+# buscar el numero dentro del archivo: recien vinculada, la sesion vive en
+# whatsapp.db-wal y no en whatsapp.db, y la busqueda a mano decia "sin vincular"
+# con una sesion buena. Eso hacia que el instalador levantara un segundo puente
+# con la misma sesion.
+function NumeroDe($store, $bin) {
+  if (-not (Test-Path (Join-Path $store "whatsapp.db"))) { return "sin vincular" }
+  if (-not $bin -or -not (Test-Path $bin)) { return "sin vincular" }
+  $antesStore = $env:WHATSAPP_STORE_DIR
+  $antesEap = $ErrorActionPreference
   try {
-    # El JID vive al principio del archivo: se leen solo los primeros 256 KB
-    # en vez de cargar una base de decenas de MB en memoria.
-    $fs = [System.IO.File]::OpenRead($db)
-    try {
-      $buf = New-Object byte[] ([Math]::Min(262144, $fs.Length))
-      [void]$fs.Read($buf, 0, $buf.Length)
-    } finally { $fs.Close() }
-    $texto = [System.Text.Encoding]::ASCII.GetString($buf)
-    if ($texto -match '(\d{10,15}):\d+@s\.whatsapp\.net') { return "+" + $Matches[1] }
+    $env:WHATSAPP_STORE_DIR = $store
+    $ErrorActionPreference = "Continue"
+    $num = & $bin --numero 2>$null | Select-Object -First 1
+    if ($num -match '^\+\d+$') { return $num }
   } catch {}
+  finally {
+    $env:WHATSAPP_STORE_DIR = $antesStore
+    $ErrorActionPreference = $antesEap
+  }
   return "sin vincular"
+}
+
+# Lo que el puente dice de si mismo (/api/status): si esta conectado a WhatsApp
+# de verdad, no solo si el puerto contesta. $null si no responde.
+function EstadoPuente($puerto) {
+  try {
+    return Invoke-RestMethod -Uri "http://localhost:$puerto/api/status" -TimeoutSec 3
+  } catch { return $null }
 }
 
 # ------------------------------------------------------------------ Claude Desktop
