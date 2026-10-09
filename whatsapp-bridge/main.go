@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/hex"
+	"crypto/sha256"
 	"context"
 	"database/sql"
 	"encoding/binary"
@@ -263,6 +265,23 @@ func NewMessageStore() (*MessageStore, error) {
 		);
 		CREATE INDEX IF NOT EXISTS idx_reactions_msg ON reactions(chat_jid, message_id);
 
+		CREATE TABLE IF NOT EXISTS poll_options (
+			message_id TEXT,
+			chat_jid TEXT,
+			option_hash TEXT,   -- sha256 de la opción en hex (así vienen los votos)
+			option_name TEXT,
+			position INTEGER,
+			PRIMARY KEY (message_id, chat_jid, option_hash)
+		);
+		CREATE TABLE IF NOT EXISTS poll_votes (
+			message_id TEXT,
+			chat_jid TEXT,
+			voter TEXT,         -- mismo formato que messages.sender
+			option_hash TEXT,
+			timestamp TIMESTAMP,
+			PRIMARY KEY (message_id, chat_jid, voter, option_hash)
+		);
+
 		CREATE TABLE IF NOT EXISTS contacts (
 			user TEXT PRIMARY KEY,   -- parte de usuario del JID, tal como queda en messages.sender (LID o teléfono)
 			phone TEXT,
@@ -351,6 +370,82 @@ func (store *MessageStore) StoreReaction(messageID, chatJID, sender, emoji strin
 	_, err := store.db.Exec(`INSERT OR REPLACE INTO reactions (message_id, chat_jid, sender, emoji, timestamp) VALUES (?, ?, ?, ?, ?)`,
 		messageID, chatJID, sender, emoji, ts.Format(dbTimeFormat))
 	return err
+}
+
+// pollCreation devuelve la encuesta del mensaje, sea cual sea su versión.
+func pollCreation(m *waProto.Message) *waProto.PollCreationMessage {
+	if m == nil {
+		return nil
+	}
+	for _, p := range []*waProto.PollCreationMessage{
+		m.GetPollCreationMessage(), m.GetPollCreationMessageV2(), m.GetPollCreationMessageV3(),
+		m.GetPollCreationMessageV5(), m.GetPollCreationMessageV6(),
+	} {
+		if p != nil {
+			return p
+		}
+	}
+	return nil
+}
+
+func pollText(p *waProto.PollCreationMessage) string {
+	names := make([]string, 0, len(p.GetOptions()))
+	for _, o := range p.GetOptions() {
+		names = append(names, o.GetOptionName())
+	}
+	return "[Encuesta] " + p.GetName() + " — opciones: " + strings.Join(names, " | ")
+}
+
+// StorePollOptions guarda las opciones de una encuesta con su hash, para poder leer los votos.
+func (store *MessageStore) StorePollOptions(messageID, chatJID string, p *waProto.PollCreationMessage) error {
+	for i, o := range p.GetOptions() {
+		h := sha256.Sum256([]byte(o.GetOptionName()))
+		if _, err := store.db.Exec(`INSERT OR REPLACE INTO poll_options (message_id, chat_jid, option_hash, option_name, position) VALUES (?, ?, ?, ?, ?)`,
+			messageID, chatJID, hex.EncodeToString(h[:]), o.GetOptionName(), i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// StorePollVote reemplaza los votos de esa persona en esa encuesta.
+func (store *MessageStore) StorePollVote(messageID, chatJID, voter string, hashes []string, ts time.Time) error {
+	if _, err := store.db.Exec(`DELETE FROM poll_votes WHERE message_id = ? AND chat_jid = ? AND voter = ?`, messageID, chatJID, voter); err != nil {
+		return err
+	}
+	for _, h := range hashes {
+		if _, err := store.db.Exec(`INSERT OR REPLACE INTO poll_votes (message_id, chat_jid, voter, option_hash, timestamp) VALUES (?, ?, ?, ?, ?)`,
+			messageID, chatJID, voter, h, ts.Format(dbTimeFormat)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// handlePollVote descifra un voto de encuesta y lo guarda. Devuelve true si el mensaje era un voto.
+func handlePollVote(client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) bool {
+	pu := msg.Message.GetPollUpdateMessage()
+	if pu == nil {
+		return false
+	}
+	chatJID := msg.Info.Chat.String()
+	voter := msg.Info.Sender.User
+	target := pu.GetPollCreationMessageKey().GetID()
+	vote, err := client.DecryptPollVote(context.Background(), msg)
+	if err != nil {
+		logger.Warnf("No pude descifrar el voto de %s en la encuesta %s: %v", voter, target, err)
+		return true
+	}
+	hashes := make([]string, 0, len(vote.GetSelectedOptions()))
+	for _, h := range vote.GetSelectedOptions() {
+		hashes = append(hashes, hex.EncodeToString(h))
+	}
+	if err := messageStore.StorePollVote(target, chatJID, voter, hashes, msg.Info.Timestamp); err != nil {
+		logger.Warnf("Failed to store poll vote: %v", err)
+	} else {
+		fmt.Printf("[%s] %s votó en la encuesta %s (%d opciones)\n", msg.Info.Timestamp.Format("2006-01-02 15:04:05"), voter, target, len(hashes))
+	}
+	return true
 }
 
 // ApplyEdit reemplaza el texto del mensaje y conserva el original la primera vez.
@@ -573,6 +668,10 @@ func extractTextContent(msg *waProto.Message) string {
 		return text
 	} else if extendedText := msg.GetExtendedTextMessage(); extendedText != nil {
 		return extendedText.GetText()
+	}
+
+	if p := pollCreation(msg); p != nil {
+		return pollText(p)
 	}
 
 	// For now, we're ignoring non-text messages
@@ -870,6 +969,11 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 	chatJID := msg.Info.Chat.String()
 	sender := msg.Info.Sender.User
 
+	// Votos de encuesta: se descifran y se guardan aparte.
+	if handlePollVote(client, messageStore, msg, logger) {
+		return
+	}
+
 	// Reacciones, ediciones y borrados: se aplican sobre el mensaje al que
 	// apuntan y no cuentan como mensaje nuevo (ni mueven la fecha del chat).
 	if handleSpecialMessage(messageStore, chatJID, sender, msg.Info.Timestamp, msg.Message, logger) {
@@ -913,6 +1017,14 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		fileLength,
 		extractQuotedInfo(msg.Message),
 	)
+
+	if err == nil {
+		if p := pollCreation(msg.Message); p != nil {
+			if perr := messageStore.StorePollOptions(msg.Info.ID, chatJID, p); perr != nil {
+				logger.Warnf("Failed to store poll options: %v", perr)
+			}
+		}
+	}
 
 	if err != nil {
 		logger.Warnf("Failed to store message: %v", err)

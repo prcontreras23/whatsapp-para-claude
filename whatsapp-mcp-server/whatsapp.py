@@ -916,3 +916,40 @@ def download_media(message_id: str, chat_jid: str) -> Optional[str]:
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         return None
+
+
+def get_polls(chat_jid: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Encuestas de un chat con sus opciones y quién votó cada una (con nombres).
+
+    Solo hay votos de las encuestas recibidas después de que el bridge empezó a guardarlas.
+    """
+    conn = sqlite3.connect(MESSAGES_DB_PATH)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, sender, content, timestamp FROM messages "
+            "WHERE chat_jid = ? AND content LIKE '[Encuesta]%' ORDER BY timestamp DESC LIMIT ?",
+            (chat_jid, limit))
+        polls = []
+        for mid, sender, content, ts in cur.fetchall():
+            cur.execute("SELECT option_hash, option_name FROM poll_options WHERE message_id = ? AND chat_jid = ? ORDER BY position",
+                        (mid, chat_jid))
+            options = cur.fetchall()
+            cur.execute("SELECT voter, option_hash FROM poll_votes WHERE message_id = ? AND chat_jid = ?", (mid, chat_jid))
+            by_hash: Dict[str, List[str]] = {}
+            voters = set()
+            for voter, h in cur.fetchall():
+                by_hash.setdefault(h, []).append(get_sender_name(voter))
+                voters.add(voter)
+            polls.append({
+                "message_id": mid,
+                "creada_por": get_sender_name(sender),
+                "fecha": ts,
+                "encuesta": content,
+                "total_votantes": len(voters),
+                "opciones": [{"opcion": n, "votos": len(by_hash.get(h, [])), "votantes": sorted(by_hash.get(h, []))}
+                             for h, n in options],
+            })
+        return polls
+    finally:
+        conn.close()

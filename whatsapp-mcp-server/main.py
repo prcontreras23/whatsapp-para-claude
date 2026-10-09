@@ -1,6 +1,7 @@
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
 from whatsapp import (
+    get_polls as whatsapp_get_polls,
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
     list_chats as whatsapp_list_chats,
@@ -291,3 +292,11 @@ def load_older_messages(chat_jid: str, count: int = 50, wait_seconds: int = 20) 
 if __name__ == "__main__":
     # Initialize and run the server
     mcp.run(transport='stdio')
+
+@mcp.tool()
+def get_polls(chat_jid: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Encuestas de un chat con opciones, cantidad de votos y quién votó cada una (con nombres).
+
+    Solo incluye encuestas recibidas después de que el bridge empezó a guardarlas.
+    """
+    return whatsapp_get_polls(chat_jid, limit)
