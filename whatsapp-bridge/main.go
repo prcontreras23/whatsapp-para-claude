@@ -674,8 +674,31 @@ func extractTextContent(msg *waProto.Message) string {
 		return pollText(p)
 	}
 
+	// Ubicaciones (30 oct 2026): antes se descartaban y el pin no quedaba en la base.
+	if loc := msg.GetLocationMessage(); loc != nil {
+		return locationText("ubicación", loc.GetDegreesLatitude(), loc.GetDegreesLongitude(), loc.GetName(), loc.GetAddress(), loc.GetComment())
+	}
+	if loc := msg.GetLiveLocationMessage(); loc != nil {
+		return locationText("ubicación en tiempo real", loc.GetDegreesLatitude(), loc.GetDegreesLongitude(), "", "", loc.GetCaption())
+	}
+
 	// For now, we're ignoring non-text messages
 	return ""
+}
+
+// locationText arma el texto de un pin: [ubicación] nombre, dirección — enlace de Maps
+func locationText(kind string, lat, lng float64, name, address, comment string) string {
+	parts := []string{}
+	for _, s := range []string{name, address, comment} {
+		if s = strings.TrimSpace(s); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	link := fmt.Sprintf("https://maps.google.com/?q=%.6f,%.6f", lat, lng)
+	if len(parts) == 0 {
+		return fmt.Sprintf("[%s] %s", kind, link)
+	}
+	return fmt.Sprintf("[%s] %s — %s", kind, strings.Join(parts, ", "), link)
 }
 
 // SendMessageResponse represents the response for the send message API
@@ -2192,11 +2215,7 @@ func handleHistorySync(client *whatsmeow.Client, messageStore *MessageStore, his
 				// Extract text content
 				var content string
 				if msg.Message.Message != nil {
-					if conv := msg.Message.Message.GetConversation(); conv != "" {
-						content = conv
-					} else if ext := msg.Message.Message.GetExtendedTextMessage(); ext != nil {
-						content = ext.GetText()
-					}
+					content = extractTextContent(msg.Message.Message)
 				}
 
 				// Extract media info
