@@ -11,14 +11,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"html"
 	"image"
-	"image/color"
-	"image/draw"
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -38,6 +39,61 @@ var (
 )
 
 const previewUA = "WhatsApp/2.24.20 A"
+
+// Solo direcciones públicas: el enlace de un mensaje no debe poder hacer que el
+// bridge consulte la red local, el propio localhost:8080 ni la metadata de la
+// nube. Se revisa la IP ya resuelta (cubre DNS rebinding) y cada redirección.
+func ipPermitida(ip net.IP) bool {
+	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() ||
+		ip.IsInterfaceLocalMulticast() || ip.Equal(net.IPv4bcast) ||
+		// 100.64.0.0/10 (CGNAT) y 0.0.0.0/8
+		(ip.To4() != nil && (ip.To4()[0] == 0 || (ip.To4()[0] == 100 && ip.To4()[1]&0xC0 == 64))))
+}
+
+func urlPermitida(u *url.URL) error {
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("esquema no permitido")
+	}
+	if p := u.Port(); p != "" && p != "80" && p != "443" {
+		return errors.New("puerto no permitido")
+	}
+	return nil
+}
+
+var previewClient = &http.Client{
+	Timeout: 10 * time.Second,
+	Transport: &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips {
+				if ipPermitida(ip) {
+					var d net.Dialer
+					return d.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+				}
+			}
+			return nil, fmt.Errorf("dirección no permitida: %s", host)
+		},
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 8 * time.Second,
+	},
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("demasiadas redirecciones")
+		}
+		return urlPermitida(req.URL)
+	},
+}
+
+const maxPixeles = 25_000_000
 
 type linkPreview struct {
 	URL, Title, Description string
@@ -62,9 +118,12 @@ func httpGet(ctx context.Context, u string, limit int64) ([]byte, string, error)
 	if err != nil {
 		return nil, "", err
 	}
+	if err := urlPermitida(req.URL); err != nil {
+		return nil, "", err
+	}
 	req.Header.Set("User-Agent", previewUA)
 	req.Header.Set("Accept-Language", "es")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := previewClient.Do(req)
 	if err != nil {
 		return nil, "", err
 	}
@@ -161,7 +220,16 @@ func firstNonEmpty(v ...string) string {
 // makeThumb reduce la imagen (lado mayor <= max) promediando píxeles, la pone
 // sobre fondo blanco (los PNG con transparencia salen negros en JPEG) y la
 // devuelve en JPEG.
-func makeThumb(data []byte, max int) ([]byte, uint32, uint32) {
+func makeThumb(data []byte, max int) (thumb []byte, w uint32, h uint32) {
+	defer func() {
+		if recover() != nil {
+			thumb, w, h = nil, 0, 0
+		}
+	}()
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width*cfg.Height > maxPixeles {
+		return nil, 0, 0
+	}
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, 0, 0
@@ -185,10 +253,6 @@ func makeThumb(data []byte, max int) ([]byte, uint32, uint32) {
 	if dh < 1 {
 		dh = 1
 	}
-	flat := image.NewRGBA(b)
-	draw.Draw(flat, b, &image.Uniform{color.White}, image.Point{}, draw.Src)
-	draw.Draw(flat, b, src, b.Min, draw.Over)
-
 	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
 	for y := 0; y < dh; y++ {
 		y0, y1 := y*sh/dh, (y+1)*sh/dh
@@ -203,10 +267,11 @@ func makeThumb(data []byte, max int) ([]byte, uint32, uint32) {
 			var r, g, bl, n uint32
 			for yy := y0; yy < y1; yy++ {
 				for xx := x0; xx < x1; xx++ {
-					o := flat.PixOffset(b.Min.X+xx, b.Min.Y+yy)
-					r += uint32(flat.Pix[o])
-					g += uint32(flat.Pix[o+1])
-					bl += uint32(flat.Pix[o+2])
+					// Sobre fondo blanco: color premultiplicado + blanco*(1-alfa).
+					pr, pg, pb, pa := src.At(b.Min.X+xx, b.Min.Y+yy).RGBA()
+					r += (pr + (0xffff - pa)) >> 8
+					g += (pg + (0xffff - pa)) >> 8
+					bl += (pb + (0xffff - pa)) >> 8
 					n++
 				}
 			}
@@ -229,7 +294,11 @@ func textMessageWithPreview(message string) *waProto.Message {
 	if link == "" {
 		return &waProto.Message{Conversation: proto.String(message)}
 	}
-	p := fetchLinkPreview(link)
+	var p *linkPreview
+	func() {
+		defer func() { recover() }()
+		p = fetchLinkPreview(link)
+	}()
 	if p == nil {
 		return &waProto.Message{ExtendedTextMessage: &waProto.ExtendedTextMessage{
 			Text: proto.String(message), MatchedText: proto.String(link),
