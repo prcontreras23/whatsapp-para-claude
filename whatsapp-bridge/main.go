@@ -910,7 +910,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, r
 			sentURL, sentMediaKey, sentFileSHA256, sentFileEncSHA256, sentFileLength = resp.URL, resp.MediaKey, resp.FileSHA256, resp.FileEncSHA256, resp.FileLength
 		}
 	} else {
-		msg.Conversation = proto.String(message)
+		msg = textMessageWithPreview(message)
 	}
 
 	// Send message
