@@ -21,6 +21,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -43,12 +44,36 @@ const previewUA = "WhatsApp/2.24.20 A"
 // Solo direcciones públicas: el enlace de un mensaje no debe poder hacer que el
 // bridge consulte la red local, el propio localhost:8080 ni la metadata de la
 // nube. Se revisa la IP ya resuelta (cubre DNS rebinding) y cada redirección.
+// Rangos que nunca se consultan, además de los que ya marca net.IP. Incluye
+// los de transición IPv6 (NAT64, 6to4, Teredo), que llevan una IPv4 adentro.
+var rangosBloqueados = func() []netip.Prefix {
+	var out []netip.Prefix
+	for _, c := range []string{
+		"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15", "240.0.0.0/4",
+		"64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32", "fec0::/10", "fc00::/7",
+	} {
+		out = append(out, netip.MustParsePrefix(c))
+	}
+	return out
+}()
+
 func ipPermitida(ip net.IP) bool {
-	return !(ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() ||
-		ip.IsInterfaceLocalMulticast() || ip.Equal(net.IPv4bcast) ||
-		// 100.64.0.0/10 (CGNAT) y 0.0.0.0/8
-		(ip.To4() != nil && (ip.To4()[0] == 0 || (ip.To4()[0] == 100 && ip.To4()[1]&0xC0 == 64))))
+		ip.IsInterfaceLocalMulticast() || ip.Equal(net.IPv4bcast) {
+		return false
+	}
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	a = a.Unmap()
+	for _, r := range rangosBloqueados {
+		if r.Contains(a) {
+			return false
+		}
+	}
+	return true
 }
 
 func urlPermitida(u *url.URL) error {
